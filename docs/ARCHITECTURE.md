@@ -47,35 +47,35 @@ Hard rules:
 
 ## 2. Directory map
 
-| Path                    | Responsibility                                                                                                                                                  |
-| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `app/`                  | Routes. `(auth)` group for credential screens, `dashboard/` for the workspace, `share/` for public reports, `api/` for route handlers.                          |
-| `app/api/`              | HTTP surface. Thin handlers only: validate → service → envelope (`lib/http/api-response.ts`).                                                                   |
-| `components/ui/`        | Design-system primitives (Button, Card, Badge, Alert, EmptyState, …).                                                                                           |
-| `components/dashboard   | issues                                                                                                                                                          | tasks | evidence | verification | reports | ai` | Feature-scoped components, arranged by domain module. |
-| `components/marketing/` | Landing-page sections.                                                                                                                                          |
-| `components/brand/`     | Logo and brand marks.                                                                                                                                           |
-| `components/system/`    | Cross-cutting UI (build-stage notices, error/empty screens).                                                                                                    |
-| `lib/config/`           | The only place that reads `process.env`; Zod-validated.                                                                                                         |
-| `lib/db/`               | Mongoose connection management (cached across hot reloads).                                                                                                     |
-| `lib/auth/`             | Session helpers and server-side permission gates.                                                                                                               |
-| `lib/ai/`               | Central AI layer: client wrapper, prompts, JSON parsing/validation, per-operation services.                                                                     |
-| `lib/storage/`          | Object-storage adapter, signed URLs, upload key strategy.                                                                                                       |
-| `lib/pdf/`              | Report HTML template + Puppeteer renderer.                                                                                                                      |
-| `lib/security/`         | Rate limiting, upload validation, share tokens, MIME rules.                                                                                                     |
-| `lib/http/`             | Response envelope helpers and request helpers.                                                                                                                  |
-| `lib/errors/`           | Typed application errors and normalization to HTTP-safe errors.                                                                                                 |
-| `lib/logger.ts`         | Structured server logging with secret redaction.                                                                                                                |
-| `lib/utils/`            | Pure, framework-free helpers (class merging, formatting).                                                                                                       |
-| `lib/constants/`        | Domain labels/tones and the lifecycle definition.                                                                                                               |
-| `models/`               | Mongoose models: users, workspaces, projects, issues, inputs, diagnoses, plans, tasks, evidence, verifications, reports, notifications, activity logs, AI runs. |
-| `services/`             | Business logic: issue, ai orchestration, diagnosis, planning, task, verification, report, upload.                                                               |
-| `validators/`           | Zod schemas for every external boundary and every stored AI artefact.                                                                                           |
-| `types/`                | Shared TypeScript contracts (`types/domain.ts`, `types/api.ts`).                                                                                                |
-| `hooks/`                | Client hooks.                                                                                                                                                   |
-| `tests/`                | `unit/`, `integration/`, `e2e/`.                                                                                                                                |
-| `scripts/`              | Operational scripts (index sync, seed tooling for tests, PDF smoke check).                                                                                      |
-| `docs/`                 | Architecture and operational documentation.                                                                                                                     |
+| Path                    | Responsibility                                                                                                                                                                                                                                                          |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app/`                  | Routes. `(auth)` group for credential screens, `dashboard/` for the workspace, `share/` for public reports, `api/` for route handlers.                                                                                                                                  |
+| `app/api/`              | HTTP surface. Thin handlers only: validate → service → envelope (`lib/http/api-response.ts`).                                                                                                                                                                           |
+| `components/ui/`        | Design-system primitives (Button, Card, Badge, Alert, EmptyState, …).                                                                                                                                                                                                   |
+| `components/dashboard   | issues                                                                                                                                                                                                                                                                  | tasks | evidence | verification | reports | ai` | Feature-scoped components, arranged by domain module. |
+| `components/marketing/` | Landing-page sections.                                                                                                                                                                                                                                                  |
+| `components/brand/`     | Logo and brand marks.                                                                                                                                                                                                                                                   |
+| `components/system/`    | Cross-cutting UI (build-stage notices, error/empty screens).                                                                                                                                                                                                            |
+| `lib/config/`           | The only place that reads `process.env`; Zod-validated.                                                                                                                                                                                                                 |
+| `lib/db/`               | Mongoose connection management (cached across hot reloads), status and ping helpers.                                                                                                                                                                                    |
+| `lib/auth/`             | Session helpers and server-side permission gates.                                                                                                                                                                                                                       |
+| `lib/ai/`               | Central AI layer: client wrapper, prompts, JSON parsing/validation, per-operation services.                                                                                                                                                                             |
+| `lib/storage/`          | Object-storage adapter, signed URLs, upload key strategy.                                                                                                                                                                                                               |
+| `lib/pdf/`              | Report HTML template + Puppeteer renderer.                                                                                                                                                                                                                              |
+| `lib/security/`         | Rate limiting, upload validation, share tokens, MIME rules.                                                                                                                                                                                                             |
+| `lib/http/`             | Response envelope helpers and request helpers.                                                                                                                                                                                                                          |
+| `lib/errors/`           | Typed application errors and normalization to HTTP-safe errors.                                                                                                                                                                                                         |
+| `lib/logger.ts`         | Structured server logging with secret redaction.                                                                                                                                                                                                                        |
+| `lib/utils/`            | Pure, framework-free helpers (class merging, formatting).                                                                                                                                                                                                               |
+| `lib/constants/`        | Domain labels/tones and the lifecycle definition.                                                                                                                                                                                                                       |
+| `models/`               | One file per collection (users, workspaces, projects, issues, issue_inputs, diagnoses, solution_plans, tasks, evidence, verifications, reports, ai_runs, activity_logs, notifications), plus `schema-options.ts` for shared conventions and `index.ts` as the registry. |
+| `services/`             | Business logic: issue, ai orchestration, diagnosis, planning, task, verification, report, upload.                                                                                                                                                                       |
+| `validators/`           | Zod schemas for every external boundary and every stored AI artefact.                                                                                                                                                                                                   |
+| `types/`                | Shared TypeScript contracts (`types/domain.ts`, `types/api.ts`).                                                                                                                                                                                                        |
+| `hooks/`                | Client hooks.                                                                                                                                                                                                                                                           |
+| `tests/`                | `unit/`, `integration/`, `e2e/`.                                                                                                                                                                                                                                        |
+| `scripts/`              | Operational scripts (index sync, seed tooling for tests, PDF smoke check).                                                                                                                                                                                              |
+| `docs/`                 | Architecture and operational documentation.                                                                                                                                                                                                                             |
 
 `utils/` from the original specification is intentionally folded into `lib/utils/` so
 there is exactly one home for framework-free helpers.
@@ -105,7 +105,41 @@ and returned as a generic 500 with a request id — never as an internal stack t
 
 ---
 
-## 4. API contract
+## 4. Database layer
+
+`lib/db/connect.ts` is the only module that talks to Mongoose's connection:
+
+- **Lazy + cached**: the connection is opened on first use and cached on `globalThis`, so
+  hot reloads and serverless invocations reuse one pool instead of opening a connection per
+  module evaluation. Concurrent callers share the in-flight promise.
+- **Fail fast**: `bufferCommands` is off — operations never hang waiting for a connection,
+  they throw. Services always `await connectToDatabase()` first.
+- **Injection safe**: `sanitizeFilter` wraps plain filter values in `$eq`, so a crafted
+  object can never be interpreted as a query operator.
+- **Observable**: connect/reconnect/lost/error events are logged through `lib/logger`;
+  `getDatabaseStatus()` and `pingDatabase()` support diagnostics and health checks.
+- **Configurable**: `MONGODB_URI`/`MONGODB_DB_NAME` come from `lib/config/env.ts`; a missing
+  URI raises an actionable error instead of a confusing driver failure.
+
+Schema conventions (`models/schema-options.ts`):
+
+- `timestamps: true` (createdAt/updatedAt), `versionKey: false` (no `__v`), `minimize: false`.
+- A shared `toJSON`/`toObject` transform converts `_id` to `id` and strips `passwordHash`.
+- `registeredModel()` reuses an existing compiled model, which keeps hot reload and
+  serverless runtimes free of `OverwriteModelError`.
+- Enums are imported from `types/domain.ts` (single source of truth shared with validators
+  and UI labels), never re-typed in the schema.
+- Indexes are declared per model next to the fields they serve. Where a compound index
+  already covers a single-field access path (index prefix rule), no redundant single-field
+  index is added.
+
+Operational tooling: `scripts/db-verify.mts` (`npm run db:verify`) compiles every model,
+runs 70 schema assertions without a database, and — when `MONGODB_URI` is present —
+connects, creates/syncs indexes, reports them and pings the server.
+
+---
+
+## 5. API contract
 
 ```jsonc
 // success
@@ -124,7 +158,7 @@ List endpoints return `{ items, meta: { page, pageSize, total, totalPages, hasNe
 
 ---
 
-## 5. AI layer
+## 6. AI layer
 
 - `lib/ai/client.ts` — single provider wrapper (timeouts, retries, token accounting).
 - `lib/ai/services/*` — one service per operation: classification, diagnosis, planning,
@@ -139,7 +173,7 @@ may return `needs_review` rather than claiming a resolution.
 
 ---
 
-## 6. Security model
+## 7. Security model
 
 | Concern        | Control                                                                                       |
 | -------------- | --------------------------------------------------------------------------------------------- |
@@ -153,7 +187,7 @@ may return `needs_review` rather than claiming a resolution.
 
 ---
 
-## 7. Build phases
+## 8. Build phases
 
 | Phase | Tasks | Focus                                                                                                |
 | ----- | ----- | ---------------------------------------------------------------------------------------------------- |

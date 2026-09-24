@@ -147,6 +147,42 @@ export interface ActivityMetadata {
   [key: string]: unknown;
 }
 
+/**
+ * Audited actions. Stored as strings (with schema-level enum validation) so the
+ * activity feed stays filterable without a lookup table.
+ */
+export const ACTIVITY_ACTIONS = [
+  "workspace.created",
+  "workspace.member_added",
+  "workspace.member_removed",
+  "workspace.member_role_changed",
+  "project.created",
+  "project.updated",
+  "project.archived",
+  "issue.created",
+  "issue.updated",
+  "issue.status_changed",
+  "issue.analyzed",
+  "issue.assigned",
+  "issue.resolved",
+  "input.uploaded",
+  "diagnosis.generated",
+  "plan.generated",
+  "task.created",
+  "task.updated",
+  "task.assigned",
+  "task.completed",
+  "task.reopened",
+  "task.skipped",
+  "evidence.uploaded",
+  "evidence.deleted",
+  "verification.started",
+  "verification.completed",
+  "report.generated",
+  "report.shared",
+] as const;
+export type ActivityAction = (typeof ACTIVITY_ACTIONS)[number];
+
 export const NOTIFICATION_TYPES = [
   "issue_assigned",
   "task_assigned",

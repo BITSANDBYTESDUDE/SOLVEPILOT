@@ -98,11 +98,17 @@ let cachedServerEnv: ServerEnv | null = null;
 let cachedPublicEnv: PublicEnv | null = null;
 
 /**
+ * Production parses the environment once per process; development re-validates
+ * on each access so changed values are picked up immediately.
+ */
+const CACHE_ENV = process.env.NODE_ENV === "production";
+
+/**
  * Parsed server environment. Throws on invalid values — never returns a
  * partially-configured object.
  */
 export function getServerEnv(): ServerEnv {
-  if (cachedServerEnv) return cachedServerEnv;
+  if (CACHE_ENV && cachedServerEnv) return cachedServerEnv;
 
   const parsed = serverEnvSchema.safeParse(process.env);
   if (!parsed.success) {
@@ -117,7 +123,7 @@ export function getServerEnv(): ServerEnv {
 }
 
 export function getPublicEnv(): PublicEnv {
-  if (cachedPublicEnv) return cachedPublicEnv;
+  if (CACHE_ENV && cachedPublicEnv) return cachedPublicEnv;
 
   const parsed = publicEnvSchema.safeParse({
     NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL,

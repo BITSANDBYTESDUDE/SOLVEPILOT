@@ -179,6 +179,8 @@ npm run dev                  # http://localhost:3000
 | `npm run lint` / `npm run lint:fix`       | ESLint (flat config).                                              |
 | `npm run format` / `npm run format:check` | Prettier with Tailwind class sorting.                              |
 | `npm run verify`                          | format:check + lint + typecheck + build — run before opening a PR. |
+| `npm run db:verify`                       | Validate every Mongoose schema and ensure database indexes.        |
+| `npm run db:indexes`                      | Sync indexes (drops indexes that no longer exist in the schemas).  |
 
 ---
 
@@ -186,15 +188,51 @@ npm run dev                  # http://localhost:3000
 
 1. Create a database (local `mongod`, Docker, or MongoDB Atlas).
 2. Set `MONGODB_URI` in `.env.local`.
-3. Start the app — the connection is created lazily and cached across hot reloads.
+3. Start the app — the connection is created lazily on first use and cached across hot
+   reloads and serverless invocations.
+4. Verify the schema and create indexes:
 
-Collections: `users`, `workspaces`, `projects`, `issues`, `issue_inputs`, `diagnoses`,
-`solution_plans`, `tasks`, `evidence`, `verifications`, `reports`, `notifications`,
-`activity_logs`, `ai_runs`.
+```bash
+npm run db:verify             # validate all 14 schemas, ensure indexes, ping the server
+npm run db:verify -- --static # schema validation only, never touches a database
+npm run db:indexes            # syncIndexes: also drops indexes removed from the schemas
+```
 
-Indexes are declared on the models (`User.email` unique, workspace/project/issue foreign
-keys, `issue.status`, `issue.priority`, `issue.createdAt`, `task.status`, plus text indexes
-for search). Large files are never stored in MongoDB — only metadata and storage keys.
+Collections and their indexes are declared in `models/` (one file per collection):
+
+| Collection       | Purpose                                           | Key indexes                                                                                                                                                                                 |
+| ---------------- | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `users`          | accounts, role, preferences                       | `email` (unique), `createdAt`                                                                                                                                                               |
+| `workspaces`     | tenancy root + members/roles                      | `slug` (unique), `ownerId`, `members.userId`                                                                                                                                                |
+| `projects`       | issue grouping per workspace                      | `workspaceId+status`, `workspaceId+createdAt`, text `name/description`                                                                                                                      |
+| `issues`         | the core problem record                           | `workspaceId+status+createdAt`, `workspaceId+priority`, `workspaceId+category`, `workspaceId+assignedTo`, `projectId+createdAt`, `status+createdAt`, `resolvedAt`, text `title/description` |
+| `issue_inputs`   | text/image/PDF/audio inputs                       | `issueId+createdAt`, `processingStatus`                                                                                                                                                     |
+| `diagnoses`      | summary, causes, observations, risks, assumptions | `issueId+createdAt`                                                                                                                                                                         |
+| `solution_plans` | objective, recommendations, ordered steps         | `issueId+createdAt`                                                                                                                                                                         |
+| `tasks`          | trackable work items                              | `issueId+order`, `status`, `assignedTo+status`, text `title/description`                                                                                                                    |
+| `evidence`       | before/after/supporting proof                     | `issueId+type+createdAt`, `uploadedBy`                                                                                                                                                      |
+| `verifications`  | checks with pass/fail/unknown results             | `issueId+createdAt`, `status+createdAt`                                                                                                                                                     |
+| `reports`        | PDF reports and share tokens                      | `issueId+createdAt`, `shareToken` (unique, partial)                                                                                                                                         |
+| `ai_runs`        | AI usage, tokens and latency                      | `issueId+createdAt`, `type+createdAt`, `status+createdAt`                                                                                                                                   |
+| `activity_logs`  | audit trail                                       | `workspaceId+createdAt`, `issueId+createdAt`, `actorId+createdAt`                                                                                                                           |
+| `notifications`  | per-user read/unread state                        | `userId+readAt+createdAt`, `userId+createdAt`                                                                                                                                               |
+
+Notes:
+
+- Every document is validated against its schema before it reaches the database, and every
+  collection stores `createdAt`/`updatedAt` (timestamps) with `__v` disabled.
+- Indexes are created automatically in development (`autoIndex`). In production they are
+  created by the `db:verify` / `db:indexes` commands as a deployment step.
+- Mongoose runs with `sanitizeFilter: true` (query-selector injection protection) and
+  `bufferCommands: false` (operations fail fast instead of buffering silently).
+- Large files are never stored in MongoDB — only metadata, storage keys and extracted text.
+- The scripts above import server-only modules, which is why they run with
+  `NODE_OPTIONS=--conditions=react-server` (already wired into the npm scripts).
+- `GET /api/health` reports liveness plus whether the database is configured and
+  reachable (`ok` / `degraded`). It never exposes host names, database names or error
+  details, which makes it safe for load balancers and uptime monitors.
+- Next.js loads `.env.local` at boot; restart `npm run dev` after adding or removing a
+  variable so the running process picks it up.
 
 ---
 
@@ -282,7 +320,7 @@ SolvePilot is built incrementally, and the application stays runnable after ever
 | --- | -------------------------------------------------------------- | ---------- |
 | 01  | Initialize Next.js with TypeScript, Tailwind, ESLint, Prettier | ✅ Done    |
 | 02  | Application architecture and folder structure                  | ✅ Done    |
-| 03  | Configure MongoDB and Mongoose                                 | ⏳ Planned |
+| 03  | Configure MongoDB and Mongoose                                 | ✅ Done    |
 | 04  | Implement authentication                                       | ⏳ Planned |
 | 05  | User profile and preferences                                   | ⏳ Planned |
 | 06  | Workspace creation                                             | ⏳ Planned |
@@ -321,11 +359,12 @@ SolvePilot is built incrementally, and the application stays runnable after ever
 | 39  | Unit, integration, API and E2E tests                           | ⏳ Planned |
 | 40  | Production readiness, deployment config and documentation      | ⏳ Planned |
 
-**Current state:** the foundation and architecture are in place — design system, shared
-error/logger/config layers, marketing landing page, and the route skeleton. `/login`,
-`/register` and `/dashboard` deliberately render an explicit "planned task" notice instead
-of pretending to work; each is replaced by its real implementation in the tasks above.
-No screenshots are included because no product UI exists yet.
+**Current state:** the foundation, architecture and database layer are in place — design
+system, shared error/logger/config layers, marketing landing page, route skeleton, and all
+14 Mongoose models with indexes (`npm run db:verify` → 70/70 schema checks pass).
+`/login`, `/register` and `/dashboard` deliberately render an explicit "planned task" notice
+instead of pretending to work; each is replaced by its real implementation in the tasks
+above. No screenshots are included because no product UI exists yet.
 
 ---
 
