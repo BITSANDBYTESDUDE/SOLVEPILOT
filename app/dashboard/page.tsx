@@ -1,12 +1,15 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { Settings } from "lucide-react";
+import { Building2, Settings } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
+import { getActiveWorkspaceId } from "@/lib/auth/active-workspace";
+import { WORKSPACE_ROLE_LABELS } from "@/lib/constants/domain";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { requireUser } from "@/lib/auth/guards";
 import { formatDateTime } from "@/lib/utils";
+import { listWorkspacesForUser } from "@/services/workspace.service";
 
 export const metadata: Metadata = {
   title: "Dashboard",
@@ -29,6 +32,13 @@ export const dynamic = "force-dynamic";
 export default async function DashboardPage() {
   const { user, session } = await requireUser("/dashboard");
 
+  const [workspaces, activeWorkspaceId] = await Promise.all([
+    listWorkspacesForUser(user.id),
+    getActiveWorkspaceId(),
+  ]);
+  const activeWorkspace =
+    workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? workspaces[0];
+
   return (
     <div className="flex flex-col gap-6">
       <header>
@@ -38,6 +48,47 @@ export default async function DashboardPage() {
           {formatDateTime(session.expiresAt)}
         </p>
       </header>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Workspace</CardTitle>
+          <CardDescription>
+            Everything you build lives inside a workspace. Switch workspaces from the header.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {activeWorkspace ? (
+            <div className="flex flex-wrap items-center gap-3">
+              <Building2 className="size-5 text-muted-foreground" aria-hidden="true" />
+              <div className="min-w-0">
+                <p className="truncate text-sm font-medium">{activeWorkspace.name}</p>
+                <p className="truncate font-mono text-xs text-muted-foreground">
+                  /{activeWorkspace.slug}
+                </p>
+              </div>
+              <Badge variant="secondary">
+                {WORKSPACE_ROLE_LABELS[activeWorkspace.role] ?? activeWorkspace.role}
+              </Badge>
+              <span className="text-xs text-muted-foreground">
+                {activeWorkspace.memberCount}{" "}
+                {activeWorkspace.memberCount === 1 ? "member" : "members"}
+              </span>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-3">
+              <p className="text-sm text-muted-foreground">
+                You are not in a workspace yet. Create one to start capturing problems.
+              </p>
+              <Button variant="outline" size="sm" asChild>
+                <Link href="/dashboard/settings#workspaces">
+                  <Building2 aria-hidden="true" />
+                  Create your first workspace
+                </Link>
+              </Button>
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>
@@ -73,7 +124,7 @@ export default async function DashboardPage() {
         </CardHeader>
         <CardContent>
           <ul className="flex list-disc flex-col gap-1.5 pl-5 text-sm text-muted-foreground">
-            <li>Task 06 — workspace creation (your first workspace is created there)</li>
+            <li>Task 07 — workspace members and roles</li>
             <li>Task 08 — projects</li>
             <li>Task 09 — dashboard statistics</li>
             <li>Task 10 — activity logging</li>

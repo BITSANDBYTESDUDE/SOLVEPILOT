@@ -316,6 +316,40 @@ verification flow and is deliberately not part of this task.
 
 ---
 
+## Workspaces
+
+A workspace is the tenancy root: projects, problems and everything under them belong to one.
+A user only ever reaches workspaces they are a member of.
+
+| Endpoint                 | Method | Result                                                    |
+| ------------------------ | ------ | --------------------------------------------------------- |
+| `/api/workspaces`        | GET    | `200` with the caller's workspaces and their role in each |
+| `/api/workspaces`        | POST   | `201`; the creator becomes its `owner`                    |
+| `/api/workspaces/[id]`   | GET    | `200` for members, `404` for everyone else                |
+| `/api/workspaces/[id]`   | PATCH  | Rename or change slug; requires `admin` or above          |
+| `/api/workspaces/active` | POST   | Selects the active workspace, after verifying membership  |
+
+**Tenancy is enforced in one place** (`lib/auth/workspace.ts`). Every workspace read goes
+through `requireWorkspaceMember()`, so no route can forget the check.
+
+**Non-members get a 404, not a 403.** Answering "forbidden" would confirm the workspace
+exists, which would turn the endpoint into a probe for other tenants' ids. A member without
+the required role does get a 403 — membership is already established at that point.
+
+**Slugs** are lowercase, hyphenated and unique across the deployment. Omit one and it is
+derived from the name; a collision becomes `acme-2`, `acme-3`, and so on. Route-colliding
+slugs (`api`, `dashboard`, `login`, `settings`, …) are reserved and rejected.
+
+**Roles** are `owner` > `admin` > `member`, compared through a single rank table so the
+service and the UI can never disagree about precedence. The creator's `owner` role is set
+server-side and is never read from the request.
+
+The active workspace lives in a non-`httpOnly` cookie so the switcher can update it without a
+round trip. It is **not** an authorization credential — membership is re-resolved from the
+database on every request, so editing it by hand cannot grant access to anything.
+
+---
+
 ## AI setup
 
 1. Create an OpenAI API key and set `OPENAI_API_KEY` in `.env.local`.
@@ -364,6 +398,7 @@ npm run verify          # format:check + lint + typecheck + production build
 npm run db:verify       # 79 schema, index and serialization checks (15 collections)
 npm run auth:verify     # 39 checks: hashing, enumeration-proofing, session ids, cookie
 npm run profile:verify  # 26 checks: profile, avatar scheme, preferences, password rules
+npm run workspace:verify # 33 checks: slug rules, reserved slugs, roles, membership
 ```
 
 All three share one harness (`scripts/lib/verify-harness.ts`) and exit non-zero on any
@@ -421,7 +456,7 @@ SolvePilot is built incrementally, and the application stays runnable after ever
 | 03  | Configure MongoDB and Mongoose                                 | ✅ Done    |
 | 04  | Implement authentication                                       | ✅ Done    |
 | 05  | User profile and preferences                                   | ✅ Done    |
-| 06  | Workspace creation                                             | ⏳ Planned |
+| 06  | Workspace creation                                             | ✅ Done    |
 | 07  | Workspace members and roles                                    | ⏳ Planned |
 | 08  | Projects                                                       | ⏳ Planned |
 | 09  | Dashboard statistics                                           | ⏳ Planned |
@@ -457,15 +492,15 @@ SolvePilot is built incrementally, and the application stays runnable after ever
 | 39  | Unit, integration, API and E2E tests                           | ⏳ Planned |
 | 40  | Production readiness, deployment config and documentation      | ⏳ Planned |
 
-**Current state:** the foundation, architecture, database layer, authentication and user
-profile are in place — design system, shared error/logger/config layers, marketing landing
-page, 15 Mongoose models with indexes (`npm run db:verify` → 79/79 schema checks pass),
-registration, sign-in and sign-out with revocable server-side sessions
-(`npm run auth:verify` → 39/39 checks pass), and `/dashboard/settings` for profile,
-appearance and password (`npm run profile:verify` → 26/26 checks pass). The whole
-`/dashboard` section is guarded by a single layout, so no page under it can forget its own
-check. No screenshots are included because the product UI beyond these screens does not
-exist yet.
+**Current state:** the foundation, architecture, database layer, authentication, user
+profile and workspaces are in place — design system, shared error/logger/config layers,
+marketing landing page, 15 Mongoose models with indexes (`npm run db:verify` → 79/79 schema
+checks pass), registration, sign-in and sign-out with revocable server-side sessions
+(`npm run auth:verify` → 39/39 checks pass), `/dashboard/settings` for profile, appearance
+and password (`npm run profile:verify` → 26/26 checks pass), and multi-workspace tenancy with
+a switcher (`npm run workspace:verify` → 33/33 checks pass). The whole `/dashboard` section is
+guarded by a single layout, so no page under it can forget its own check. No screenshots are
+included because the product UI beyond these screens does not exist yet.
 
 ---
 
