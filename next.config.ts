@@ -12,6 +12,10 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
+  // The app is previewed through a proxy whose host changes per environment.
+  // Without this, Next.js blocks /_next/* dev resources as cross-origin and
+  // hot reload silently stops working in the preview.
+  allowedDevOrigins: ["*.e2b.app", "localhost"],
   // Mongoose ships native bindings and must not be bundled by the server compiler.
   serverExternalPackages: ["mongoose"],
   typescript: {

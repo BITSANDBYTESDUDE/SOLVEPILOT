@@ -242,7 +242,7 @@ Notes:
 Email-and-password authentication with **revocable, server-side sessions**.
 
 ```bash
-npm run auth:verify   # 38 security assertions — hashing, validation, limiter, cookie
+npm run auth:verify   # 39 security assertions — hashing, validation, limiter, cookie
 ```
 
 **How a session works.** Signing in creates a document in `sessions` and returns an opaque
@@ -286,6 +286,36 @@ and moves to a shared store in Task 38 (security hardening).
 
 ---
 
+## Profile and preferences
+
+`/dashboard/settings` manages the signed-in account. Every endpoint resolves the user from
+the session — no request can name another account's id, so there is no path to editing
+somebody else's profile (IDOR).
+
+| Endpoint                   | Method | Result                                                                     |
+| -------------------------- | ------ | -------------------------------------------------------------------------- |
+| `/api/profile`             | GET    | `200` with the profile read from the database                              |
+| `/api/profile`             | PATCH  | Update `name` and/or `avatarUrl`; partial updates leave the rest untouched |
+| `/api/profile/preferences` | PATCH  | Update `theme` and/or `emailNotifications` independently                   |
+| `/api/profile/password`    | POST   | Requires the current password; revokes every _other_ session               |
+
+**Appearance** supports `light`, `dark` and `system`. The choice is applied to the document
+immediately and written to `localStorage`, which is what keeps the no-flash bootstrap script
+in `lib/theme.ts` correct on the next visit — so the painted theme and the stored preference
+cannot drift apart.
+
+**Avatar URLs are restricted to `http`/`https`.** The value ends up in an `<img src>`, so a
+`javascript:` or `data:` URL would be an XSS vector; both are rejected by the validator rather
+than left to the browser.
+
+**Password changes sign out every other device** while keeping the current session alive, so a
+stolen cookie stops working without the change reading as a bug.
+
+The email is shown read-only: changing it is an account-identity operation that needs its own
+verification flow and is deliberately not part of this task.
+
+---
+
 ## AI setup
 
 1. Create an OpenAI API key and set `OPENAI_API_KEY` in `.env.local`.
@@ -324,8 +354,20 @@ Automated tests live in `tests/`:
   verification → report → open the secure share link.
 
 External AI calls are mocked in deterministic tests so results never depend on a live
-model. The test runner and suite are added in Phase 9 (Task 39); `npm run verify` keeps
-lint, types and the production build honest in the meantime.
+model. The test runner and suite are added in Phase 9 (Task 39).
+
+Until then, three assertion scripts cover the behaviour that must not regress. They run
+without a database, a browser or a live model:
+
+```bash
+npm run verify          # format:check + lint + typecheck + production build
+npm run db:verify       # 79 schema, index and serialization checks (15 collections)
+npm run auth:verify     # 39 checks: hashing, enumeration-proofing, session ids, cookie
+npm run profile:verify  # 26 checks: profile, avatar scheme, preferences, password rules
+```
+
+All three share one harness (`scripts/lib/verify-harness.ts`) and exit non-zero on any
+failure, so they are safe to wire into CI.
 
 ---
 
@@ -378,7 +420,7 @@ SolvePilot is built incrementally, and the application stays runnable after ever
 | 02  | Application architecture and folder structure                  | ✅ Done    |
 | 03  | Configure MongoDB and Mongoose                                 | ✅ Done    |
 | 04  | Implement authentication                                       | ✅ Done    |
-| 05  | User profile and preferences                                   | ⏳ Planned |
+| 05  | User profile and preferences                                   | ✅ Done    |
 | 06  | Workspace creation                                             | ⏳ Planned |
 | 07  | Workspace members and roles                                    | ⏳ Planned |
 | 08  | Projects                                                       | ⏳ Planned |
@@ -415,13 +457,15 @@ SolvePilot is built incrementally, and the application stays runnable after ever
 | 39  | Unit, integration, API and E2E tests                           | ⏳ Planned |
 | 40  | Production readiness, deployment config and documentation      | ⏳ Planned |
 
-**Current state:** the foundation, architecture, database layer and authentication are in
-place — design system, shared error/logger/config layers, marketing landing page, 15 Mongoose
-models with indexes (`npm run db:verify` → 79/79 schema checks pass), and working
+**Current state:** the foundation, architecture, database layer, authentication and user
+profile are in place — design system, shared error/logger/config layers, marketing landing
+page, 15 Mongoose models with indexes (`npm run db:verify` → 79/79 schema checks pass),
 registration, sign-in and sign-out with revocable server-side sessions
-(`npm run auth:verify` → 38/38 security checks pass). `/dashboard` is gated by
-`requireUser()` and shows the signed-in account. No screenshots are included because the
-product UI beyond the auth screens does not exist yet.
+(`npm run auth:verify` → 39/39 checks pass), and `/dashboard/settings` for profile,
+appearance and password (`npm run profile:verify` → 26/26 checks pass). The whole
+`/dashboard` section is guarded by a single layout, so no page under it can forget its own
+check. No screenshots are included because the product UI beyond these screens does not
+exist yet.
 
 ---
 

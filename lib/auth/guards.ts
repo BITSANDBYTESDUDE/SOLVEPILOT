@@ -1,5 +1,7 @@
 import "server-only";
 
+import { cache } from "react";
+
 import { redirect } from "next/navigation";
 
 import { auth } from "@/auth";
@@ -47,44 +49,46 @@ export function isAuthenticationAvailable(): boolean {
  * sign-in form. Protected routes must not rely on this distinction — they go
  * through `requireUser()` / `requireApiUser()`, which fail closed.
  */
-export async function getCurrentUser(): Promise<AuthenticatedContext | null> {
-  if (!isAuthenticationAvailable()) return null;
+export const getCurrentUser: () => Promise<AuthenticatedContext | null> = cache(
+  async function getCurrentUser(): Promise<AuthenticatedContext | null> {
+    if (!isAuthenticationAvailable()) return null;
 
-  const session = await auth();
-  const sessionId = session?.sessionId;
-  const sessionUserId = session?.user?.id;
+    const session = await auth();
+    const sessionId = session?.sessionId;
+    const sessionUserId = session?.user?.id;
 
-  if (!sessionId || !sessionUserId) return null;
+    if (!sessionId || !sessionUserId) return null;
 
-  const record = await getSession(sessionId);
-  if (!record || record.userId !== sessionUserId) return null;
+    const record = await getSession(sessionId);
+    if (!record || record.userId !== sessionUserId) return null;
 
-  const user = await User.findById(record.userId).lean<
-    (UserDocument & { _id: Types.ObjectId }) | null
-  >();
-  if (!user) {
-    // Account was deleted while the session was still valid — end it.
-    log.warn("session points at a missing user", { userId: record.userId });
-    return null;
-  }
+    const user = await User.findById(record.userId).lean<
+      (UserDocument & { _id: Types.ObjectId }) | null
+    >();
+    if (!user) {
+      // Account was deleted while the session was still valid — end it.
+      log.warn("session points at a missing user", { userId: record.userId });
+      return null;
+    }
 
-  return {
-    user: {
-      id: String(user._id),
-      name: user.name,
-      email: user.email,
-      avatarUrl: user.avatarUrl ?? null,
-      role: user.role,
-      createdAt: user.createdAt,
-    },
-    session: {
-      id: record.id,
-      sessionId: record.sessionId,
-      createdAt: record.createdAt,
-      expiresAt: record.expiresAt,
-    },
-  };
-}
+    return {
+      user: {
+        id: String(user._id),
+        name: user.name,
+        email: user.email,
+        avatarUrl: user.avatarUrl ?? null,
+        role: user.role,
+        createdAt: user.createdAt,
+      },
+      session: {
+        id: record.id,
+        sessionId: record.sessionId,
+        createdAt: record.createdAt,
+        expiresAt: record.expiresAt,
+      },
+    };
+  },
+);
 
 /** Like `getCurrentUser`, but for API routes: throws instead of returning null. */
 export async function requireApiUser(): Promise<AuthenticatedContext> {

@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import type { ApiFailure } from "@/types/api";
+import { useFormSubmit } from "@/hooks/use-form-submit";
 
 export interface AuthField {
   name: string;
@@ -53,55 +53,19 @@ export function AuthForm({
   footer,
 }: AuthFormProps) {
   const router = useRouter();
-  const [formError, setFormError] = React.useState<string | null>(null);
-  const [fieldErrors, setFieldErrors] = React.useState<Record<string, string>>({});
-  const [pending, startPending] = React.useTransition();
+  const { pending, formError, fieldErrors, submit } = useFormSubmit();
 
-  async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
+  function onSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const payload = Object.fromEntries(new FormData(event.currentTarget).entries());
 
-    const form = event.currentTarget;
-    const payload = Object.fromEntries(new FormData(form).entries());
-
-    setFormError(null);
-    setFieldErrors({});
-
-    startPending(() => {
-      void (async () => {
-        try {
-          const response = await fetch(endpoint, {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify(payload),
-          });
-
-          const body = (await response.json().catch(() => null)) as {
-            success: boolean;
-            error?: ApiFailure["error"];
-          } | null;
-
-          if (!response.ok || !body || body.success !== true) {
-            const error = body?.error;
-            const details = error?.details ?? {};
-            const nextFieldErrors: Record<string, string> = {};
-
-            for (const [key, messages] of Object.entries(details)) {
-              const first = messages[0];
-              if (first) nextFieldErrors[key] = first;
-            }
-
-            setFieldErrors(nextFieldErrors);
-            setFormError(error?.message ?? "Something went wrong. Please try again.");
-            return;
-          }
-
-          // The session cookie is now set; refresh so Server Components read it.
-          router.refresh();
-          router.replace(callbackUrl);
-        } catch {
-          setFormError("We could not reach the server. Check your connection and try again.");
-        }
-      })();
+    submit(endpoint, payload, {
+      silent: true,
+      onSuccess: () => {
+        // The session cookie is now set; refresh so Server Components read it.
+        router.refresh();
+        router.replace(callbackUrl);
+      },
     });
   }
 
@@ -123,7 +87,6 @@ export function AuthForm({
 
           {fields.map((field) => {
             const error = fieldErrors[field.name];
-            const describedBy = error ? `${field.name}-error` : undefined;
 
             return (
               <div key={field.name} className="flex flex-col gap-2">
@@ -136,7 +99,7 @@ export function AuthForm({
                   placeholder={field.placeholder}
                   required
                   aria-invalid={error ? true : undefined}
-                  aria-describedby={describedBy}
+                  aria-describedby={error ? `${field.name}-error` : undefined}
                 />
                 {error ? (
                   <p id={`${field.name}-error`} className="text-sm text-destructive">

@@ -18,7 +18,8 @@
     "verify": "npm run format:check && npm run lint && npm run typecheck && npm run build",
     "db:verify": "NODE_OPTIONS=--conditions=react-server tsx scripts/db-verify.mts",
     "db:indexes": "NODE_OPTIONS=--conditions=react-server tsx scripts/db-verify.mts --sync",
-    "auth:verify": "NODE_OPTIONS=--conditions=react-server tsx scripts/auth-verify.mts"
+    "auth:verify": "NODE_OPTIONS=--conditions=react-server tsx scripts/auth-verify.mts",
+    "profile:verify": "NODE_OPTIONS=--conditions=react-server tsx scripts/profile-verify.mts"
   },
   "dependencies": {
     "@radix-ui/react-label": "^2.1.15",

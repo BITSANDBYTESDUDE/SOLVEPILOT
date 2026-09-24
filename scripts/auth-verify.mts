@@ -34,6 +34,7 @@ import { encodeSessionToken, sessionCookieName } from "@/lib/auth/session-cookie
 import { decode } from "next-auth/jwt";
 import { MAX_USER_AGENT_LENGTH, Session, User } from "@/models";
 import { parseCredentials, signInSchema, signUpSchema } from "@/validators/auth";
+import { VerifyHarness, jsonOf } from "./lib/verify-harness";
 
 // @next/env is CommonJS; load it through createRequire so this ESM script reads
 // exactly the same .env files the Next.js runtime does.
@@ -46,18 +47,9 @@ loadEnvConfig(process.cwd());
 /* Harness                                                                     */
 /* -------------------------------------------------------------------------- */
 
-type Assertion = { description: string; test: () => boolean | Promise<boolean> };
-
-const sections: Array<{ title: string; assertions: Assertion[] }> = [];
-
-function section(title: string, assertions: Assertion[]): void {
-  sections.push({ title, assertions });
-}
-
-/** Validate/serialize a document in memory — no database round-trip required. */
-function jsonOf(document: { toJSON: () => unknown }): Record<string, unknown> {
-  return document.toJSON() as unknown as Record<string, unknown>;
-}
+const harness = new VerifyHarness();
+const section = (title: string, assertions: Parameters<typeof harness.section>[1]) =>
+  harness.section(title, assertions);
 
 /* -------------------------------------------------------------------------- */
 /* 1. Passwords                                                                */
@@ -304,14 +296,29 @@ section("Brute-force limiter", [
     },
   },
   {
-    description: "an expired window starts a fresh count",
+    description: "keeps counting while the window is still open",
     test: () => {
       clearRateLimit(LIMITER);
       for (let index = 0; index < 3; index += 1) {
-        consumeRateLimit(LIMITER, "k3", { limit: 3, windowMs: 1 });
+        consumeRateLimit(LIMITER, "k3", { limit: 3, windowMs: 60_000 });
       }
-      const blocked = consumeRateLimit(LIMITER, "k3", { limit: 3, windowMs: 1 });
-      return !blocked.allowed;
+      return !consumeRateLimit(LIMITER, "k3", { limit: 3, windowMs: 60_000 }).allowed;
+    },
+  },
+  {
+    description: "an expired window starts a fresh count",
+    test: async () => {
+      clearRateLimit(LIMITER);
+      for (let index = 0; index < 3; index += 1) {
+        consumeRateLimit(LIMITER, "k4", { limit: 3, windowMs: 20 });
+      }
+      const blocked = consumeRateLimit(LIMITER, "k4", { limit: 3, windowMs: 20 });
+
+      // Wait well past the window (3x) so the reset is not a race.
+      await new Promise((resolve) => setTimeout(resolve, 60));
+
+      const fresh = consumeRateLimit(LIMITER, "k4", { limit: 3, windowMs: 20 });
+      return !blocked.allowed && fresh.allowed && fresh.attempts === 1;
     },
   },
   {
@@ -435,31 +442,4 @@ section("Secrets never serialize", [
 /* 7. Run the suite                                                            */
 /* -------------------------------------------------------------------------- */
 
-let passed = 0;
-let failed = 0;
-
-for (const group of sections) {
-  console.log(`\n${group.title}`);
-
-  for (const assertion of group.assertions) {
-    let ok = false;
-    let failureReason = "";
-
-    try {
-      ok = await assertion.test();
-    } catch (error) {
-      failureReason = ` (threw: ${error instanceof Error ? error.message : String(error)})`;
-    }
-
-    if (ok) {
-      passed += 1;
-      console.log(`  ✓ ${assertion.description}`);
-    } else {
-      failed += 1;
-      console.log(`  ✗ ${assertion.description}${failureReason}`);
-    }
-  }
-}
-
-console.log(`\n${failed === 0 ? "PASS" : "FAIL"} — ${passed}/${passed + failed} checks passed`);
-process.exit(failed === 0 ? 0 : 1);
+await harness.run();

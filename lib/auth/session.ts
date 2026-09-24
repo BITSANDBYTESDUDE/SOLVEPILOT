@@ -163,7 +163,28 @@ export async function revokeSession(id: string | null | undefined): Promise<bool
   return result.deletedCount > 0;
 }
 
-/** End every session for a user — used after a password change. */
+/**
+ * End every session except one — used after a password change, so a stolen
+ * cookie dies while the person who just changed the password stays signed in.
+ *
+ * `keepSessionHash` is the stored SHA-256 hash, i.e. the `sessionId` returned
+ * by `getSession()`, never a raw id.
+ */
+export async function revokeOtherSessionsForUser(
+  userId: Types.ObjectId | string,
+  keepSessionHash?: string,
+): Promise<number> {
+  await connectToDatabase();
+
+  const filter: Record<string, unknown> = { userId: new Types.ObjectId(String(userId)) };
+  if (keepSessionHash) filter.sessionHash = { $ne: keepSessionHash };
+
+  const result = await Session.deleteMany(filter);
+  log.info("other sessions revoked", { userId: String(userId), count: result.deletedCount });
+  return result.deletedCount;
+}
+
+/** End every session for a user — used when an account is locked or deleted. */
 export async function revokeAllSessionsForUser(userId: Types.ObjectId | string): Promise<number> {
   await connectToDatabase();
   const result = await Session.deleteMany({ userId: new Types.ObjectId(String(userId)) });
