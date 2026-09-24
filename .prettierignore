@@ -1,0 +1,24 @@
+# Dependencies and build output
+node_modules
+.next
+out
+build
+dist
+coverage
+
+# Generated / lock files
+package-lock.json
+*.tsbuildinfo
+next-env.d.ts
+
+# Environment templates (dotenv format is not Prettier-parseable)
+.env
+.env.*
+!.env.example
+.env.example
+
+# Static assets
+public
+
+# Empty directory placeholders
+.gitkeep
