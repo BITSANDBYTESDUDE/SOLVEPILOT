@@ -193,7 +193,7 @@ npm run dev                  # http://localhost:3000
 4. Verify the schema and create indexes:
 
 ```bash
-npm run db:verify             # validate all 14 schemas, ensure indexes, ping the server
+npm run db:verify             # validate all 15 schemas, ensure indexes, ping the server
 npm run db:verify -- --static # schema validation only, never touches a database
 npm run db:indexes            # syncIndexes: also drops indexes removed from the schemas
 ```
@@ -216,6 +216,7 @@ Collections and their indexes are declared in `models/` (one file per collection
 | `ai_runs`        | AI usage, tokens and latency                      | `issueId+createdAt`, `type+createdAt`, `status+createdAt`                                                                                                                                   |
 | `activity_logs`  | audit trail                                       | `workspaceId+createdAt`, `issueId+createdAt`, `actorId+createdAt`                                                                                                                           |
 | `notifications`  | per-user read/unread state                        | `userId+readAt+createdAt`, `userId+createdAt`                                                                                                                                               |
+| `sessions`       | revocable sign-in sessions (hashed token)         | `sessionHash` (unique), `userId+createdAt`, `expiresAt`                                                                                                                                     |
 
 Notes:
 
@@ -233,6 +234,85 @@ Notes:
   details, which makes it safe for load balancers and uptime monitors.
 - Next.js loads `.env.local` at boot; restart `npm run dev` after adding or removing a
   variable so the running process picks it up.
+
+---
+
+## Authentication
+
+Email-and-password authentication with **revocable, server-side sessions**.
+
+```bash
+npm run auth:verify   # 39 security assertions — hashing, validation, limiter, cookie
+```
+
+**How a session works.** Signing in creates a document in `sessions` and returns an opaque
+256-bit random id to the browser inside an encrypted, `HttpOnly`, `SameSite=Lax` cookie
+(`__Host-` prefixed in production). Only the **SHA-256 hash** of that id is stored, so a
+database leak cannot be replayed as a session. Every authenticated request re-reads the
+session document, which is what makes logout real: signing out deletes the row, so a captured
+cookie stops working immediately instead of lingering until it expires.
+
+- **Absolute expiry** 30 days from sign-in; **idle timeout** 7 days, sliding forward on use.
+- At most 10 concurrent sessions per user — the oldest are pruned when a new device signs in.
+- `GET /api/auth/sessions` lists the signed-in user's active sessions (metadata and expiry
+  only; nothing replayable).
+
+**Passwords** are hashed with bcrypt cost 12. Inputs longer than 72 characters are rejected
+rather than silently truncated at bcrypt's boundary. A failed sign-in always answers
+`Email or password is incorrect.` and still performs a bcrypt comparison, so neither the
+message nor the response timing reveals whether an email is registered. Repeated failures are
+throttled per email (5) and per IP (20) over 15 minutes; registration is throttled to 10 per
+IP per hour.
+
+| Endpoint             | Method | Result                                                                 |
+| -------------------- | ------ | ---------------------------------------------------------------------- |
+| `/api/auth/register` | POST   | `201` + session cookie, `409` duplicate email, `400` validation, `429` |
+| `/api/auth/login`    | POST   | `200` + session cookie, `401` bad credentials, `429` throttled         |
+| `/api/auth/signout`  | POST   | `200`, deletes the session document and expires the cookie             |
+| `/api/auth/session`  | GET    | `200` with the user read from the database, or `401`                   |
+| `/api/auth/sessions` | GET    | `200` with the caller's active sessions                                |
+
+Every endpoint answers with the canonical `{ success, data }` / `{ success, error }` envelope.
+
+**Server-side gates.** Pages call `requireUser()` (redirects to `/login` with a
+same-origin-only `callbackUrl`); route handlers call `requireApiUser()` (throws a `401` the
+error envelope renders). Both re-read the user from the database, so a deleted account or a
+changed role takes effect on the next request. `/dashboard` is `force-dynamic` — a protected
+page must never be prerendered.
+
+`AUTH_SECRET` (`openssl rand -base64 32`) encrypts the cookie; without it sign-in cannot
+work. Note that the brute-force limiter is in-process for now: it protects a single instance,
+and moves to a shared store in Task 38 (security hardening).
+
+---
+
+## Profile and preferences
+
+`/dashboard/settings` manages the signed-in account. Every endpoint resolves the user from
+the session — no request can name another account's id, so there is no path to editing
+somebody else's profile (IDOR).
+
+| Endpoint                   | Method | Result                                                                     |
+| -------------------------- | ------ | -------------------------------------------------------------------------- |
+| `/api/profile`             | GET    | `200` with the profile read from the database                              |
+| `/api/profile`             | PATCH  | Update `name` and/or `avatarUrl`; partial updates leave the rest untouched |
+| `/api/profile/preferences` | PATCH  | Update `theme` and/or `emailNotifications` independently                   |
+| `/api/profile/password`    | POST   | Requires the current password; revokes every _other_ session               |
+
+**Appearance** supports `light`, `dark` and `system`. The choice is applied to the document
+immediately and written to `localStorage`, which is what keeps the no-flash bootstrap script
+in `lib/theme.ts` correct on the next visit — so the painted theme and the stored preference
+cannot drift apart.
+
+**Avatar URLs are restricted to `http`/`https`.** The value ends up in an `<img src>`, so a
+`javascript:` or `data:` URL would be an XSS vector; both are rejected by the validator rather
+than left to the browser.
+
+**Password changes sign out every other device** while keeping the current session alive, so a
+stolen cookie stops working without the change reading as a bug.
+
+The email is shown read-only: changing it is an account-identity operation that needs its own
+verification flow and is deliberately not part of this task.
 
 ---
 
@@ -274,8 +354,20 @@ Automated tests live in `tests/`:
   verification → report → open the secure share link.
 
 External AI calls are mocked in deterministic tests so results never depend on a live
-model. The test runner and suite are added in Phase 9 (Task 39); `npm run verify` keeps
-lint, types and the production build honest in the meantime.
+model. The test runner and suite are added in Phase 9 (Task 39).
+
+Until then, three assertion scripts cover the behaviour that must not regress. They run
+without a database, a browser or a live model:
+
+```bash
+npm run verify          # format:check + lint + typecheck + production build
+npm run db:verify       # 79 schema, index and serialization checks (15 collections)
+npm run auth:verify     # 39 checks: hashing, enumeration-proofing, session ids, cookie
+npm run profile:verify  # 26 checks: profile, avatar scheme, preferences, password rules
+```
+
+All three share one harness (`scripts/lib/verify-harness.ts`) and exit non-zero on any
+failure, so they are safe to wire into CI.
 
 ---
 
@@ -296,7 +388,13 @@ lint, types and the production build honest in the meantime.
 
 ## Security
 
-- Authentication with Auth.js; sessions resolved on the server for every request.
+- Authentication with Auth.js; the session cookie is an encrypted envelope around an
+  opaque id, and the session itself is re-validated against the `sessions` collection on
+  every request, so sessions are revocable rather than merely expiring.
+- Passwords hashed with bcrypt (cost 12); `passwordHash` is `select: false` and stripped by
+  the JSON transform. Failed sign-ins answer identically for unknown emails and wrong
+  passwords, and take the same time, so accounts cannot be enumerated.
+- Sign-in is throttled per email and per IP; registration per IP.
 - Role-based authorization (owner / admin / member) enforced inside services — never in
   the client.
 - Workspace isolation: every query is scoped to workspaces the caller belongs to, which
@@ -321,8 +419,8 @@ SolvePilot is built incrementally, and the application stays runnable after ever
 | 01  | Initialize Next.js with TypeScript, Tailwind, ESLint, Prettier | ✅ Done    |
 | 02  | Application architecture and folder structure                  | ✅ Done    |
 | 03  | Configure MongoDB and Mongoose                                 | ✅ Done    |
-| 04  | Implement authentication                                       | ⏳ Planned |
-| 05  | User profile and preferences                                   | ⏳ Planned |
+| 04  | Implement authentication                                       | ✅ Done    |
+| 05  | User profile and preferences                                   | ✅ Done    |
 | 06  | Workspace creation                                             | ⏳ Planned |
 | 07  | Workspace members and roles                                    | ⏳ Planned |
 | 08  | Projects                                                       | ⏳ Planned |
@@ -359,12 +457,15 @@ SolvePilot is built incrementally, and the application stays runnable after ever
 | 39  | Unit, integration, API and E2E tests                           | ⏳ Planned |
 | 40  | Production readiness, deployment config and documentation      | ⏳ Planned |
 
-**Current state:** the foundation, architecture and database layer are in place — design
-system, shared error/logger/config layers, marketing landing page, route skeleton, and all
-14 Mongoose models with indexes (`npm run db:verify` → 70/70 schema checks pass).
-`/login`, `/register` and `/dashboard` deliberately render an explicit "planned task" notice
-instead of pretending to work; each is replaced by its real implementation in the tasks
-above. No screenshots are included because no product UI exists yet.
+**Current state:** the foundation, architecture, database layer, authentication and user
+profile are in place — design system, shared error/logger/config layers, marketing landing
+page, 15 Mongoose models with indexes (`npm run db:verify` → 79/79 schema checks pass),
+registration, sign-in and sign-out with revocable server-side sessions
+(`npm run auth:verify` → 39/39 checks pass), and `/dashboard/settings` for profile,
+appearance and password (`npm run profile:verify` → 26/26 checks pass). The whole
+`/dashboard` section is guarded by a single layout, so no page under it can forget its own
+check. No screenshots are included because the product UI beyond these screens does not
+exist yet.
 
 ---
 

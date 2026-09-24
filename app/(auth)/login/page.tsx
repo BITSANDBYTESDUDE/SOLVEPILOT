@@ -1,6 +1,9 @@
 import type { Metadata } from "next";
+import Link from "next/link";
+import { redirect } from "next/navigation";
 
-import { BuildStageNotice } from "@/components/system/build-stage-notice";
+import { AuthForm } from "@/components/auth/auth-form";
+import { getCurrentUser } from "@/lib/auth/guards";
 
 export const metadata: Metadata = {
   title: "Sign in",
@@ -8,12 +11,59 @@ export const metadata: Metadata = {
   robots: { index: false, follow: false },
 };
 
-export default function LoginPage() {
+interface LoginPageProps {
+  searchParams: Promise<{ callbackUrl?: string }>;
+}
+
+/** Only same-origin paths are accepted, so `callbackUrl` cannot be an open redirect. */
+function safeCallbackUrl(value: string | undefined): string {
+  if (!value) return "/dashboard";
+  if (!value.startsWith("/") || value.startsWith("//")) return "/dashboard";
+  return value;
+}
+
+export default async function LoginPage({ searchParams }: LoginPageProps) {
+  // Already signed in? Don't show a form that would only fail.
+  if (await getCurrentUser()) redirect("/dashboard");
+
+  const { callbackUrl } = await searchParams;
+  const destination = safeCallbackUrl(callbackUrl);
+
   return (
-    <BuildStageNotice
-      title="Sign in is not available in this build yet"
-      plannedTask="Phase 1 · Task 04 — Authentication"
-      description="Credentials, sessions and server-side authorization are implemented in the authentication task. This route is wired so navigation stays valid while the module is being built."
+    <AuthForm
+      title="Sign in"
+      description="Welcome back. Pick up where you left off."
+      endpoint="/api/auth/login"
+      callbackUrl={destination}
+      submitLabel="Sign in"
+      fields={[
+        {
+          name: "email",
+          label: "Email",
+          type: "email",
+          autoComplete: "email",
+          placeholder: "you@example.com",
+        },
+        {
+          name: "password",
+          label: "Password",
+          type: "password",
+          autoComplete: "current-password",
+          placeholder: "Your password",
+        },
+      ]}
+      footer={
+        <>
+          New to SolvePilot?{" "}
+          <Link
+            href={`/register${callbackUrl ? `?callbackUrl=${encodeURIComponent(callbackUrl)}` : ""}`}
+            className="font-medium text-foreground underline-offset-4 hover:underline"
+          >
+            Create an account
+          </Link>
+          .
+        </>
+      }
     />
   );
 }

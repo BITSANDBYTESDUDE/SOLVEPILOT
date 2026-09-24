@@ -25,6 +25,8 @@ import {
 } from "@/lib/db/connect";
 import * as models from "@/models";
 
+import { VerifyHarness, isValid, jsonOf } from "./lib/verify-harness";
+
 // @next/env is CommonJS; load it through createRequire so this ESM script reads
 // exactly the same .env files the Next.js runtime does.
 const require = createRequire(import.meta.url);
@@ -42,30 +44,9 @@ const objectId = () => new mongoose.Types.ObjectId();
 /* Harness                                                                     */
 /* -------------------------------------------------------------------------- */
 
-type Assertion = {
-  description: string;
-  test: () => boolean | Promise<boolean>;
-};
-
-const sections: Array<{ title: string; assertions: Assertion[] }> = [];
-
-function section(title: string, assertions: Assertion[]): void {
-  sections.push({ title, assertions });
-}
-
-/** Validate a document in memory — no database round-trip required. */
-async function isValid<TDocument>(
-  model: Model<TDocument>,
-  input: Record<string, unknown>,
-): Promise<boolean> {
-  const document = new model(input as unknown as TDocument);
-  try {
-    await document.validate();
-    return true;
-  } catch {
-    return false;
-  }
-}
+const harness = new VerifyHarness();
+const section = (title: string, assertions: Parameters<typeof harness.section>[1]) =>
+  harness.section(title, assertions);
 
 /* -------------------------------------------------------------------------- */
 /* Registry                                                                    */
@@ -106,16 +87,13 @@ const MODELS: ModelEntry[] = [
   entry("AiRun", models.AiRun),
   entry("ActivityLog", models.ActivityLog),
   entry("Notification", models.Notification),
+  entry("Session", models.Session),
 ];
 
 function indexNamesOf<TDocument>(model: Model<TDocument>): string[] {
   return model.schema
     .indexes()
     .map(([fields]) => Object.keys(fields as Record<string, unknown>).join("+"));
-}
-
-function jsonOf(document: { toJSON: () => unknown }): Record<string, unknown> {
-  return document.toJSON() as unknown as Record<string, unknown>;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -532,6 +510,62 @@ section("Notification schema", [
   },
 ]);
 
+section("Session schema", [
+  {
+    description: "accepts a valid session",
+    test: () =>
+      isValid(models.Session, {
+        sessionHash: "a".repeat(64),
+        userId: objectId(),
+        expiresAt: new Date(Date.now() + 60_000),
+      }),
+  },
+  {
+    description: "requires sessionHash",
+    test: async () =>
+      !(await isValid(models.Session, { userId: objectId(), expiresAt: new Date() })),
+  },
+  {
+    description: "requires userId",
+    test: async () =>
+      !(await isValid(models.Session, { sessionHash: "a".repeat(64), expiresAt: new Date() })),
+  },
+  {
+    description: "requires expiresAt",
+    test: async () =>
+      !(await isValid(models.Session, { sessionHash: "a".repeat(64), userId: objectId() })),
+  },
+  {
+    description: "defaults userAgent and ipAddress to null",
+    test: () => {
+      const session = new models.Session({
+        sessionHash: "a".repeat(64),
+        userId: objectId(),
+        expiresAt: new Date(),
+      });
+      return session.userAgent === null && session.ipAddress === null;
+    },
+  },
+  {
+    description: "caps the user agent length",
+    test: () =>
+      models.Session.schema.path("userAgent")?.options?.maxlength === models.MAX_USER_AGENT_LENGTH,
+  },
+  {
+    description: "json transform removes _id",
+    test: () => {
+      const json = jsonOf(
+        new models.Session({
+          sessionHash: "a".repeat(64),
+          userId: objectId(),
+          expiresAt: new Date(),
+        }),
+      );
+      return json.id !== undefined && json._id === undefined;
+    },
+  },
+]);
+
 section("Index coverage", [
   {
     description: "User.email unique",
@@ -569,6 +603,13 @@ section("Index coverage", [
       ),
   },
   {
+    description: "Session hash unique + user and expiry indexes",
+    test: () =>
+      ["sessionHash", "userId+createdAt", "expiresAt"].every((name) =>
+        indexNamesOf(models.Session).includes(name),
+      ),
+  },
+  {
     description: "text search indexes on Issue, Project and Task",
     test: () =>
       [models.Issue, models.Project, models.Task].every((model) =>
@@ -583,31 +624,7 @@ section("Index coverage", [
 /* 3. Run the suite                                                            */
 /* -------------------------------------------------------------------------- */
 
-let passed = 0;
-let failed = 0;
-
-for (const group of sections) {
-  console.log(`\n${group.title}`);
-
-  for (const assertion of group.assertions) {
-    let ok = false;
-    let failureReason = "";
-
-    try {
-      ok = await assertion.test();
-    } catch (error) {
-      failureReason = ` (threw: ${error instanceof Error ? error.message : String(error)})`;
-    }
-
-    if (ok) {
-      passed += 1;
-      console.log(`  ✓ ${assertion.description}`);
-    } else {
-      failed += 1;
-      console.log(`  ✗ ${assertion.description}${failureReason}`);
-    }
-  }
-}
+let { passed, failed } = await harness.runCollecting();
 
 /* -------------------------------------------------------------------------- */
 /* 4. Live database checks (optional)                                          */
@@ -662,5 +679,4 @@ if (staticOnly) {
 /* Summary                                                                     */
 /* -------------------------------------------------------------------------- */
 
-console.log(`\n${failed === 0 ? "PASS" : "FAIL"} — ${passed}/${passed + failed} checks passed`);
-process.exit(failed === 0 ? 0 : 1);
+harness.report(passed, failed);
