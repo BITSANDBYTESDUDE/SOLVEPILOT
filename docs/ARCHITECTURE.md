@@ -58,7 +58,7 @@ Hard rules:
 | `components/system/`    | Cross-cutting UI (build-stage notices, error/empty screens).                                                                                                                                                                                                            |
 | `lib/config/`           | The only place that reads `process.env`; Zod-validated.                                                                                                                                                                                                                 |
 | `lib/db/`               | Mongoose connection management (cached across hot reloads), status and ping helpers.                                                                                                                                                                                    |
-| `lib/auth/`             | Session helpers and server-side permission gates.                                                                                                                                                                                                                       |
+| `lib/auth/`             | Session service (create/lookup/revoke/prune), bcrypt helpers, the session cookie codec, and server-side gates (`requireUser`, `requireApiUser`).                                                                                                                        |
 | `lib/ai/`               | Central AI layer: client wrapper, prompts, JSON parsing/validation, per-operation services.                                                                                                                                                                             |
 | `lib/storage/`          | Object-storage adapter, signed URLs, upload key strategy.                                                                                                                                                                                                               |
 | `lib/pdf/`              | Report HTML template + Puppeteer renderer.                                                                                                                                                                                                                              |
@@ -175,15 +175,17 @@ may return `needs_review` rather than claiming a resolution.
 
 ## 7. Security model
 
-| Concern        | Control                                                                                       |
-| -------------- | --------------------------------------------------------------------------------------------- |
-| Authentication | Auth.js with database sessions; `AUTH_SECRET` required in production.                         |
-| Authorization  | Workspace role checks (owner/admin/member) inside services for every resource.                |
-| Tenancy        | All queries scoped by `workspaceId`; membership resolved from the session.                    |
-| Uploads        | MIME + size validation, content sniffing where practical, storage keys generated server-side. |
-| Public reports | Cryptographically random share tokens; no raw ObjectIds or private fields in public payloads. |
-| Secrets        | Server-only env access via `lib/config/env.ts`; secrets redacted in logs.                     |
-| Errors         | Internal details logged server-side, generic messages to clients.                             |
+| Concern         | Control                                                                                                                                                                                                  |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Authentication  | Auth.js cookie (encrypted JWE) wrapping an opaque id; the session of record lives in `sessions` and is re-validated on every request, so sessions are revocable. bcrypt cost 12; `AUTH_SECRET` required. |
+| Sessions        | Hashed session id (SHA-256) only, 30-day absolute expiry, 7-day sliding idle timeout, 10 per user.                                                                                                       |
+| Credential flow | Enumeration-proof error messages and matching response timing; throttled per email, per IP and per registration IP.                                                                                      |
+| Authorization   | Workspace role checks (owner/admin/member) inside services for every resource.                                                                                                                           |
+| Tenancy         | All queries scoped by `workspaceId`; membership resolved from the session.                                                                                                                               |
+| Uploads         | MIME + size validation, content sniffing where practical, storage keys generated server-side.                                                                                                            |
+| Public reports  | Cryptographically random share tokens; no raw ObjectIds or private fields in public payloads.                                                                                                            |
+| Secrets         | Server-only env access via `lib/config/env.ts`; secrets redacted in logs.                                                                                                                                |
+| Errors          | Internal details logged server-side, generic messages to clients.                                                                                                                                        |
 
 ---
 

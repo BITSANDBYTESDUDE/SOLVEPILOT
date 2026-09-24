@@ -106,6 +106,7 @@ const MODELS: ModelEntry[] = [
   entry("AiRun", models.AiRun),
   entry("ActivityLog", models.ActivityLog),
   entry("Notification", models.Notification),
+  entry("Session", models.Session),
 ];
 
 function indexNamesOf<TDocument>(model: Model<TDocument>): string[] {
@@ -532,6 +533,62 @@ section("Notification schema", [
   },
 ]);
 
+section("Session schema", [
+  {
+    description: "accepts a valid session",
+    test: () =>
+      isValid(models.Session, {
+        sessionHash: "a".repeat(64),
+        userId: objectId(),
+        expiresAt: new Date(Date.now() + 60_000),
+      }),
+  },
+  {
+    description: "requires sessionHash",
+    test: async () =>
+      !(await isValid(models.Session, { userId: objectId(), expiresAt: new Date() })),
+  },
+  {
+    description: "requires userId",
+    test: async () =>
+      !(await isValid(models.Session, { sessionHash: "a".repeat(64), expiresAt: new Date() })),
+  },
+  {
+    description: "requires expiresAt",
+    test: async () =>
+      !(await isValid(models.Session, { sessionHash: "a".repeat(64), userId: objectId() })),
+  },
+  {
+    description: "defaults userAgent and ipAddress to null",
+    test: () => {
+      const session = new models.Session({
+        sessionHash: "a".repeat(64),
+        userId: objectId(),
+        expiresAt: new Date(),
+      });
+      return session.userAgent === null && session.ipAddress === null;
+    },
+  },
+  {
+    description: "caps the user agent length",
+    test: () =>
+      models.Session.schema.path("userAgent")?.options?.maxlength === models.MAX_USER_AGENT_LENGTH,
+  },
+  {
+    description: "json transform removes _id",
+    test: () => {
+      const json = jsonOf(
+        new models.Session({
+          sessionHash: "a".repeat(64),
+          userId: objectId(),
+          expiresAt: new Date(),
+        }),
+      );
+      return json.id !== undefined && json._id === undefined;
+    },
+  },
+]);
+
 section("Index coverage", [
   {
     description: "User.email unique",
@@ -566,6 +623,13 @@ section("Index coverage", [
     test: () =>
       ["issueId+createdAt", "workspaceId+createdAt"].every((name) =>
         indexNamesOf(models.ActivityLog).includes(name),
+      ),
+  },
+  {
+    description: "Session hash unique + user and expiry indexes",
+    test: () =>
+      ["sessionHash", "userId+createdAt", "expiresAt"].every((name) =>
+        indexNamesOf(models.Session).includes(name),
       ),
   },
   {

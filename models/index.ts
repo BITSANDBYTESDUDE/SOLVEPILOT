@@ -17,6 +17,7 @@ export { IssueInput, type IssueInputDocument } from "@/models/issue-input.model"
 export { Notification, type NotificationDocument } from "@/models/notification.model";
 export { Project, type ProjectDocument } from "@/models/project.model";
 export { Report, type ReportDocument } from "@/models/report.model";
+export { MAX_USER_AGENT_LENGTH, Session, type SessionDocument } from "@/models/session.model";
 export {
   SolutionPlan,
   type SolutionPlanDocument,
