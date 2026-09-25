@@ -1,14 +1,14 @@
-import { Schema, type Model } from "mongoose";
+import { Schema, Types, type Model } from "mongoose";
 
 import { baseSchemaOptions, registeredModel } from "@/models/schema-options";
 import { ACTIVITY_ACTIONS, type ActivityAction, type ActivityMetadata } from "@/types/domain";
 
 /** Append-only audit trail rendered as the issue and workspace activity timeline. */
 export interface ActivityLogDocument {
-  workspaceId: Schema.Types.ObjectId;
+  workspaceId: Types.ObjectId;
   /** Null for workspace-level events that are not tied to a single issue. */
-  issueId: Schema.Types.ObjectId | null;
-  actorId: Schema.Types.ObjectId;
+  issueId: Types.ObjectId | null;
+  actorId: Types.ObjectId;
   action: ActivityAction;
   metadata: ActivityMetadata;
   createdAt: Date;

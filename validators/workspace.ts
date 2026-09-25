@@ -85,3 +85,12 @@ export const updateWorkspaceSchema = z
   });
 
 export type UpdateWorkspaceInput = z.infer<typeof updateWorkspaceSchema>;
+
+export {
+  addWorkspaceMemberSchema,
+  objectIdSchema,
+  updateWorkspaceMemberRoleSchema,
+  workspaceRoleSchema,
+  type AddWorkspaceMemberInput,
+  type UpdateWorkspaceMemberRoleInput,
+} from "@/validators/workspace-member";

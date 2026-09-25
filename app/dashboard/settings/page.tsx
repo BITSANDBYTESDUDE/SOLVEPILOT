@@ -4,6 +4,7 @@ import { PasswordForm } from "@/components/profile/password-form";
 import { PreferencesForm } from "@/components/profile/preferences-form";
 import { ProfileForm } from "@/components/profile/profile-form";
 import { WorkspaceCreateForm } from "@/components/workspace/workspace-create-form";
+import { WorkspaceMembers } from "@/components/workspace/workspace-members";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -13,6 +14,7 @@ import { WORKSPACE_ROLE_LABELS } from "@/lib/constants/domain";
 import { formatDate } from "@/lib/utils";
 import { getProfile } from "@/services/profile.service";
 import { listWorkspacesForUser } from "@/services/workspace.service";
+import { getWorkspaceMembers } from "@/services/workspace-member.service";
 
 export const metadata: Metadata = {
   title: "Settings",
@@ -37,6 +39,13 @@ export default async function SettingsPage() {
     listWorkspacesForUser(user.id),
     getActiveWorkspaceId(),
   ]);
+
+  const activeWorkspace =
+    workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? workspaces[0];
+
+  const activeWorkspaceMembers = activeWorkspace
+    ? await getWorkspaceMembers(user.id, activeWorkspace.id).catch(() => [])
+    : [];
 
   return (
     <div className="flex flex-col gap-6">
@@ -99,6 +108,26 @@ export default async function SettingsPage() {
           </div>
         </CardContent>
       </Card>
+
+      {activeWorkspace ? (
+        <Card id="workspace-members">
+          <CardHeader>
+            <CardTitle>Workspace Members</CardTitle>
+            <CardDescription>
+              Manage members, roles and access for {activeWorkspace.name}.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <WorkspaceMembers
+              workspaceId={activeWorkspace.id}
+              workspaceName={activeWorkspace.name}
+              currentUserRole={activeWorkspace.role}
+              currentUserId={user.id}
+              initialMembers={activeWorkspaceMembers}
+            />
+          </CardContent>
+        </Card>
+      ) : null}
 
       <Card>
         <CardHeader>

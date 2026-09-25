@@ -159,6 +159,7 @@ export const ACTIVITY_ACTIONS = [
   "project.created",
   "project.updated",
   "project.archived",
+  "project.deleted",
   "issue.created",
   "issue.updated",
   "issue.status_changed",

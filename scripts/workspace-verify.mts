@@ -15,11 +15,25 @@ import { createRequire } from "node:module";
 import { Types } from "mongoose";
 
 import { findMembership, hasAtLeastRole, rolesByPrivilege } from "@/lib/auth/workspace";
+import {
+  canAddWorkspaceMember,
+  canChangeWorkspaceMemberRole,
+  canEditWorkspace,
+  canManageWorkspaceMembers,
+  canRemoveWorkspaceMember,
+  isWorkspaceAdmin,
+  isWorkspaceMember,
+  isWorkspaceOwner,
+} from "@/services/permission.service";
 import { slugify } from "@/lib/utils";
 import {
+  addWorkspaceMemberSchema,
   createWorkspaceSchema,
+  objectIdSchema,
+  updateWorkspaceMemberRoleSchema,
   updateWorkspaceSchema,
   WORKSPACE_SLUG_MAX_LENGTH,
+  workspaceRoleSchema,
 } from "@/validators/workspace";
 
 import { VerifyHarness } from "./lib/verify-harness";
@@ -241,7 +255,279 @@ section("Membership matching", [
 ]);
 
 /* -------------------------------------------------------------------------- */
-/* 6. Run the suite                                                            */
+/* 6. Member input validation (Task 07)                                       */
+/* -------------------------------------------------------------------------- */
+
+section("Workspace member validation", [
+  {
+    description: "accepts valid add member data with email and role",
+    test: () =>
+      addWorkspaceMemberSchema.safeParse({ email: "newmember@example.com", role: "member" })
+        .success,
+  },
+  {
+    description: "defaults role to member when omitted",
+    test: () =>
+      addWorkspaceMemberSchema.parse({ email: "newmember@example.com" }).role === "member",
+  },
+  {
+    description: "lowercases email address",
+    test: () =>
+      addWorkspaceMemberSchema.parse({ email: "USER@EXAMPLE.COM" }).email === "user@example.com",
+  },
+  {
+    description: "rejects invalid email address",
+    test: () => !addWorkspaceMemberSchema.safeParse({ email: "not-an-email" }).success,
+  },
+  {
+    description: "rejects empty email address",
+    test: () => !addWorkspaceMemberSchema.safeParse({ email: "" }).success,
+  },
+  {
+    description: "rejects invalid role in add member",
+    test: () =>
+      !addWorkspaceMemberSchema.safeParse({ email: "user@example.com", role: "superadmin" })
+        .success,
+  },
+  {
+    description: "accepts valid role update",
+    test: () => updateWorkspaceMemberRoleSchema.safeParse({ role: "admin" }).success,
+  },
+  {
+    description: "rejects invalid role in role update",
+    test: () => !updateWorkspaceMemberRoleSchema.safeParse({ role: "guest" }).success,
+  },
+  {
+    description: "strictly limits roles to owner, admin, member",
+    test: () =>
+      ["owner", "admin", "member"].every((r) => workspaceRoleSchema.safeParse(r).success) &&
+      !workspaceRoleSchema.safeParse("moderator").success &&
+      !workspaceRoleSchema.safeParse("user").success,
+  },
+  {
+    description: "validates valid ObjectId format",
+    test: () => objectIdSchema.safeParse(new Types.ObjectId().toHexString()).success,
+  },
+  {
+    description: "rejects invalid ObjectId format",
+    test: () => !objectIdSchema.safeParse("invalid-id-123").success,
+  },
+]);
+
+/* -------------------------------------------------------------------------- */
+/* 7. Permission predicates (Task 07)                                         */
+/* -------------------------------------------------------------------------- */
+
+section("Workspace permission predicates", [
+  {
+    description: "isWorkspaceOwner is true only for owner",
+    test: () =>
+      isWorkspaceOwner("owner") && !isWorkspaceOwner("admin") && !isWorkspaceOwner("member"),
+  },
+  {
+    description: "isWorkspaceAdmin is true for owner and admin, false for member",
+    test: () =>
+      isWorkspaceAdmin("owner") && isWorkspaceAdmin("admin") && !isWorkspaceAdmin("member"),
+  },
+  {
+    description: "isWorkspaceMember is true for owner, admin, and member",
+    test: () =>
+      isWorkspaceMember("owner") && isWorkspaceMember("admin") && isWorkspaceMember("member"),
+  },
+  {
+    description: "canManageWorkspaceMembers is true for owner and admin, false for member",
+    test: () =>
+      canManageWorkspaceMembers("owner") &&
+      canManageWorkspaceMembers("admin") &&
+      !canManageWorkspaceMembers("member"),
+  },
+  {
+    description: "canEditWorkspace is true for owner and admin, false for member",
+    test: () =>
+      canEditWorkspace("owner") && canEditWorkspace("admin") && !canEditWorkspace("member"),
+  },
+]);
+
+/* -------------------------------------------------------------------------- */
+/* 8. Role permission rules: Owner (Task 07)                                  */
+/* -------------------------------------------------------------------------- */
+
+section("Owner permission rules", [
+  {
+    description: "Owner can add member with member role",
+    test: () => canAddWorkspaceMember("owner", "member"),
+  },
+  {
+    description: "Owner can add member with admin role",
+    test: () => canAddWorkspaceMember("owner", "admin"),
+  },
+  {
+    description: "Owner can add member with owner role",
+    test: () => canAddWorkspaceMember("owner", "owner"),
+  },
+  {
+    description: "Owner can remove member",
+    test: () => canRemoveWorkspaceMember("owner", "member"),
+  },
+  {
+    description: "Owner can remove admin",
+    test: () => canRemoveWorkspaceMember("owner", "admin"),
+  },
+  {
+    description: "Owner can change member role to admin or owner",
+    test: () =>
+      canChangeWorkspaceMemberRole("owner", "member", "admin") &&
+      canChangeWorkspaceMemberRole("owner", "member", "owner"),
+  },
+  {
+    description: "Owner cannot remove self if that would leave workspace without an owner",
+    test: () => !canRemoveWorkspaceMember("owner", "owner", { totalOwners: 1, isActorSelf: true }),
+  },
+  {
+    description: "Owner can remove another owner if multiple owners exist",
+    test: () => canRemoveWorkspaceMember("owner", "owner", { totalOwners: 2, isActorSelf: false }),
+  },
+  {
+    description: "Owner cannot downgrade self if that would leave workspace without an owner",
+    test: () =>
+      !canChangeWorkspaceMemberRole("owner", "owner", "admin", {
+        totalOwners: 1,
+        isActorSelf: true,
+      }),
+  },
+  {
+    description: "Owner can change role if multiple owners exist",
+    test: () =>
+      canChangeWorkspaceMemberRole("owner", "owner", "admin", {
+        totalOwners: 2,
+        isActorSelf: true,
+      }),
+  },
+]);
+
+/* -------------------------------------------------------------------------- */
+/* 9. Role permission rules: Admin (Task 07)                                  */
+/* -------------------------------------------------------------------------- */
+
+section("Admin permission rules", [
+  {
+    description: "Admin can add member with role member",
+    test: () => canAddWorkspaceMember("admin", "member"),
+  },
+  {
+    description: "Admin can add member with role admin",
+    test: () => canAddWorkspaceMember("admin", "admin"),
+  },
+  {
+    description: "Admin cannot promote someone to owner when adding",
+    test: () => !canAddWorkspaceMember("admin", "owner"),
+  },
+  {
+    description: "Admin can remove normal member",
+    test: () => canRemoveWorkspaceMember("admin", "member"),
+  },
+  {
+    description: "Admin cannot remove owner",
+    test: () => !canRemoveWorkspaceMember("admin", "owner"),
+  },
+  {
+    description: "Admin cannot remove another admin",
+    test: () => !canRemoveWorkspaceMember("admin", "admin"),
+  },
+  {
+    description: "Admin cannot modify owner role",
+    test: () => !canChangeWorkspaceMemberRole("admin", "owner", "member"),
+  },
+  {
+    description: "Admin cannot promote someone to owner",
+    test: () => !canChangeWorkspaceMemberRole("admin", "member", "owner"),
+  },
+  {
+    description: "Admin cannot modify another admin's role",
+    test: () => !canChangeWorkspaceMemberRole("admin", "admin", "member"),
+  },
+  {
+    description: "Admin can change normal member role to admin",
+    test: () => canChangeWorkspaceMemberRole("admin", "member", "admin"),
+  },
+]);
+
+/* -------------------------------------------------------------------------- */
+/* 10. Role permission rules: Member (Task 07)                                */
+/* -------------------------------------------------------------------------- */
+
+section("Member permission rules", [
+  {
+    description: "Member cannot add member",
+    test: () => !canAddWorkspaceMember("member", "member"),
+  },
+  {
+    description: "Member cannot remove member",
+    test: () => !canRemoveWorkspaceMember("member", "member"),
+  },
+  {
+    description: "Member cannot remove owner",
+    test: () => !canRemoveWorkspaceMember("member", "owner"),
+  },
+  {
+    description: "Member cannot change roles",
+    test: () =>
+      !canChangeWorkspaceMemberRole("member", "member", "admin") &&
+      !canChangeWorkspaceMemberRole("member", "admin", "member"),
+  },
+  {
+    description: "Member can view members (is recognized as a valid member)",
+    test: () => isWorkspaceMember("member"),
+  },
+]);
+
+/* -------------------------------------------------------------------------- */
+/* 11. Security: Tenancy and IDOR Isolation (Task 07)                         */
+/* -------------------------------------------------------------------------- */
+
+const userInWorkspaceA = new Types.ObjectId();
+const userInWorkspaceB = new Types.ObjectId();
+
+const workspaceA = {
+  members: [
+    { userId: userInWorkspaceA, role: "owner" as const, joinedAt: new Date(), invitedBy: null },
+  ],
+};
+
+const workspaceB = {
+  members: [
+    { userId: userInWorkspaceB, role: "owner" as const, joinedAt: new Date(), invitedBy: null },
+  ],
+};
+
+section("Security & Tenancy Isolation (IDOR prevention)", [
+  {
+    description: "user in Workspace A is recognized as member in Workspace A",
+    test: () => findMembership(workspaceA, String(userInWorkspaceA))?.role === "owner",
+  },
+  {
+    description: "user in Workspace A cannot access Workspace B (returns null)",
+    test: () => findMembership(workspaceB, String(userInWorkspaceA)) === null,
+  },
+  {
+    description: "user in Workspace B cannot access Workspace A (returns null)",
+    test: () => findMembership(workspaceA, String(userInWorkspaceB)) === null,
+  },
+  {
+    description:
+      "tampering with workspace ID parameter isolates access and prevents cross-tenant manipulation",
+    test: () => {
+      // Simulates an API call where User A attempts to target Workspace B
+      const callerId = String(userInWorkspaceA);
+      const membershipInTargetWorkspace = findMembership(workspaceB, callerId);
+      // Because membership is null, requireWorkspaceMember throws 404, preventing IDOR
+      return membershipInTargetWorkspace === null;
+    },
+  },
+]);
+
+/* -------------------------------------------------------------------------- */
+/* 12. Run the suite                                                          */
 /* -------------------------------------------------------------------------- */
 
 await harness.run();

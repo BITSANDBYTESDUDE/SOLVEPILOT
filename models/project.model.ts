@@ -1,16 +1,16 @@
-import { Schema, type Model } from "mongoose";
+import { Schema, Types, type Model } from "mongoose";
 
 import { baseSchemaOptions, registeredModel } from "@/models/schema-options";
 import { PROJECT_STATUSES, type ProjectStatus } from "@/types/domain";
 
 export interface ProjectDocument {
-  workspaceId: Schema.Types.ObjectId;
+  workspaceId: Types.ObjectId;
   name: string;
   description: string;
   status: ProjectStatus;
   /** Hex colour used by the dashboard and project cards. */
   color: string;
-  createdBy: Schema.Types.ObjectId;
+  createdBy: Types.ObjectId;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -32,8 +32,8 @@ const projectSchema = new Schema<ProjectDocument>(
   baseSchemaOptions,
 );
 
-// `workspaceId` leads both compound indexes, so single-field workspace lookups
-// are served by their prefix (no redundant extra index).
+// `workspaceId` index plus compound indexes for status filtering and recency ordering.
+projectSchema.index({ workspaceId: 1 }, { name: "workspace_id" });
 projectSchema.index({ workspaceId: 1, status: 1 }, { name: "workspace_status" });
 projectSchema.index({ workspaceId: 1, createdAt: -1 }, { name: "workspace_recent" });
 projectSchema.index(
