@@ -26,6 +26,10 @@ const activityLogSchema = new Schema<ActivityLogDocument>(
 );
 
 activityLogSchema.index({ workspaceId: 1, createdAt: -1 }, { name: "workspace_recent" });
+activityLogSchema.index(
+  { workspaceId: 1, action: 1, createdAt: -1 },
+  { name: "workspace_action_recent" },
+);
 activityLogSchema.index({ issueId: 1, createdAt: -1 }, { name: "issue_recent" });
 activityLogSchema.index({ actorId: 1, createdAt: -1 }, { name: "actor_recent" });
 activityLogSchema.index({ action: 1 }, { name: "action" });

@@ -7,6 +7,7 @@ import {
   Calendar,
   CheckCircle2,
   FolderKanban,
+  History,
   Layers,
   Plus,
   Settings,
@@ -17,6 +18,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import * as React from "react";
 
+import { ActivityMessage, getActivityIcon } from "@/components/activity/activity-message";
 import { CreateProjectDialog } from "@/components/project/project-list";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -45,7 +47,7 @@ export function DashboardOverview({ userName, data }: DashboardOverviewProps) {
   const router = useRouter();
   const [createOpen, setCreateOpen] = React.useState(false);
 
-  const { workspace, projects, members, recentProjects } = data;
+  const { workspace, projects, members, recentProjects, recentActivities = [] } = data;
   const canCreate = canCreateProject(workspace.userRole);
 
   const activePercent =
@@ -403,6 +405,56 @@ export function DashboardOverview({ userName, data }: DashboardOverviewProps) {
           </Card>
         </div>
       </div>
+
+      {/* Recent Workspace Activity */}
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between pb-3">
+          <div>
+            <CardTitle className="flex items-center gap-2 text-base font-semibold">
+              <History className="size-4 text-primary" aria-hidden="true" />
+              Recent Activity
+            </CardTitle>
+            <CardDescription className="text-xs">
+              Latest actions across projects and workspace membership.
+            </CardDescription>
+          </div>
+          <Button variant="ghost" size="sm" asChild>
+            <Link
+              href="/dashboard/activity"
+              className="inline-flex items-center gap-1 text-xs font-medium"
+            >
+              View all activity
+              <ArrowRight className="size-3.5" aria-hidden="true" />
+            </Link>
+          </Button>
+        </CardHeader>
+
+        <CardContent>
+          {recentActivities.length === 0 ? (
+            <div className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
+              No recent activity recorded yet.
+            </div>
+          ) : (
+            <div className="flex flex-col divide-y">
+              {recentActivities.map((act) => (
+                <div key={act.id} className="flex items-start gap-3 py-3 first:pt-0 last:pb-0">
+                  <div className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full border bg-background shadow-xs">
+                    {getActivityIcon(act.action)}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm">
+                      <ActivityMessage activity={act} />
+                    </div>
+                    <span className="text-xs text-muted-foreground">
+                      {formatDate(act.createdAt)}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Create Project Modal */}
       {createOpen ? (

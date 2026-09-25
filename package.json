@@ -23,7 +23,8 @@
     "workspace:verify": "NODE_OPTIONS=--conditions=react-server tsx scripts/workspace-verify.mts",
     "members:verify": "NODE_OPTIONS=--conditions=react-server tsx scripts/workspace-verify.mts",
     "project:verify": "NODE_OPTIONS=--conditions=react-server tsx scripts/project-verify.mts",
-    "dashboard:verify": "NODE_OPTIONS=--conditions=react-server tsx scripts/dashboard-verify.mts"
+    "dashboard:verify": "NODE_OPTIONS=--conditions=react-server tsx scripts/dashboard-verify.mts",
+    "activity:verify": "NODE_OPTIONS=--conditions=react-server tsx scripts/activity-verify.mts"
   },
   "dependencies": {
     "@radix-ui/react-label": "^2.1.15",

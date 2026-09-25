@@ -6,8 +6,9 @@ import { requireWorkspaceMember } from "@/lib/auth/workspace";
 import { connectToDatabase } from "@/lib/db/connect";
 import { ForbiddenError, NotFoundError, ValidationError } from "@/lib/errors";
 import { logger } from "@/lib/logger";
-import { ActivityLog, Project, User, type ProjectDocument } from "@/models";
+import { Project, User, type ProjectDocument } from "@/models";
 import { canCreateProject, canDeleteProject, canEditProject } from "@/services/permission.service";
+import { createActivity } from "@/services/activity.service";
 import type { ProjectStatus } from "@/types/domain";
 import {
   createProjectSchema,
@@ -82,20 +83,16 @@ export async function createProject(
   })) as unknown as ProjectDocument & { _id: Types.ObjectId };
 
   // Log activity
-  try {
-    await ActivityLog.create({
-      workspaceId: new Types.ObjectId(workspaceId),
-      issueId: null,
-      actorId: new Types.ObjectId(userId),
-      action: "project.created",
-      metadata: {
-        projectId: String(created._id),
-        projectName: created.name,
-      },
-    });
-  } catch (error) {
-    log.warn("failed to record project.created activity log", { error });
-  }
+  void createActivity({
+    workspaceId,
+    actorId: userId,
+    action: "project.created",
+    metadata: {
+      projectId: String(created._id),
+      projectName: created.name,
+      color: created.color,
+    },
+  });
 
   log.info("project created", {
     workspaceId,
@@ -287,21 +284,18 @@ export async function updateProject(
   const isArchived = parsed.data.status === "archived" && existing.status !== "archived";
   const action = isArchived ? "project.archived" : "project.updated";
 
-  try {
-    await ActivityLog.create({
-      workspaceId: new Types.ObjectId(workspaceId),
-      issueId: null,
-      actorId: new Types.ObjectId(userId),
-      action,
-      metadata: {
-        projectId,
-        projectName: updated.name,
-        changedFields: Object.keys(updateFields),
-      },
-    });
-  } catch (error) {
-    log.warn(`failed to record ${action} activity log`, { error });
-  }
+  void createActivity({
+    workspaceId,
+    actorId: userId,
+    action,
+    metadata: {
+      projectId,
+      projectName: updated.name,
+      previousName: existing.name !== updated.name ? existing.name : undefined,
+      newName: existing.name !== updated.name ? updated.name : undefined,
+      changedFields: Object.keys(updateFields),
+    },
+  });
 
   log.info("project updated", {
     workspaceId,
@@ -370,20 +364,15 @@ export async function deleteProject(
     workspaceId: new Types.ObjectId(workspaceId),
   });
 
-  try {
-    await ActivityLog.create({
-      workspaceId: new Types.ObjectId(workspaceId),
-      issueId: null,
-      actorId: new Types.ObjectId(userId),
-      action: "project.deleted",
-      metadata: {
-        projectId,
-        projectName: project.name,
-      },
-    });
-  } catch (error) {
-    log.warn("failed to record project.deleted activity log", { error });
-  }
+  void createActivity({
+    workspaceId,
+    actorId: userId,
+    action: "project.deleted",
+    metadata: {
+      projectId,
+      projectName: project.name,
+    },
+  });
 
   log.info("project deleted", {
     workspaceId,

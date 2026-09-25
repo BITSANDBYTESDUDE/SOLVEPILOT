@@ -6,6 +6,7 @@ import { requireWorkspaceMember } from "@/lib/auth/workspace";
 import { connectToDatabase } from "@/lib/db/connect";
 import { logger } from "@/lib/logger";
 import { Project, type ProjectDocument } from "@/models";
+import { getRecentWorkspaceActivities, type ActivityItem } from "@/services/activity.service";
 import type { ProjectStatus, WorkspaceRole } from "@/types/domain";
 
 const log = logger.child("dashboard:service");
@@ -36,6 +37,7 @@ export interface DashboardOverview {
     total: number;
   };
   recentProjects: DashboardProject[];
+  recentActivities: ActivityItem[];
   upcomingModules: {
     problems: string;
     aiAnalysis: string;
@@ -61,21 +63,25 @@ export async function getDashboardOverview(
 
   const workspaceObjectId = new Types.ObjectId(workspaceId);
 
-  // Run efficient counting and recent project retrieval in parallel
-  const [totalProjects, activeProjects, archivedProjects, recentDocs] = await Promise.all([
-    Project.countDocuments({ workspaceId: workspaceObjectId }),
-    Project.countDocuments({ workspaceId: workspaceObjectId, status: "active" }),
-    Project.countDocuments({ workspaceId: workspaceObjectId, status: "archived" }),
-    Project.find({ workspaceId: workspaceObjectId })
-      .sort({ createdAt: -1 })
-      .limit(5)
-      .select("_id name status color createdAt")
-      .lean<
-        Array<
-          Pick<ProjectDocument, "name" | "status" | "color" | "createdAt"> & { _id: Types.ObjectId }
-        >
-      >(),
-  ]);
+  // Run efficient counting, recent projects, and recent activities in parallel
+  const [totalProjects, activeProjects, archivedProjects, recentDocs, recentActivities] =
+    await Promise.all([
+      Project.countDocuments({ workspaceId: workspaceObjectId }),
+      Project.countDocuments({ workspaceId: workspaceObjectId, status: "active" }),
+      Project.countDocuments({ workspaceId: workspaceObjectId, status: "archived" }),
+      Project.find({ workspaceId: workspaceObjectId })
+        .sort({ createdAt: -1 })
+        .limit(5)
+        .select("_id name status color createdAt")
+        .lean<
+          Array<
+            Pick<ProjectDocument, "name" | "status" | "color" | "createdAt"> & {
+              _id: Types.ObjectId;
+            }
+          >
+        >(),
+      getRecentWorkspaceActivities(userId, workspaceId, 5),
+    ]);
 
   const memberCount = Array.isArray(workspace.members) ? workspace.members.length : 1;
 
@@ -112,6 +118,7 @@ export async function getDashboardOverview(
       total: memberCount,
     },
     recentProjects,
+    recentActivities,
     upcomingModules: {
       problems: "Issue tracking coming in Task 11",
       aiAnalysis: "AI diagnosis & planning coming in Task 16",

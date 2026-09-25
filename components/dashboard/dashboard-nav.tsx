@@ -1,6 +1,6 @@
 "use client";
 
-import { FolderKanban, LayoutDashboard, Settings } from "lucide-react";
+import { FolderKanban, History, LayoutDashboard, Settings } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 const LINKS = [
   { href: "/dashboard", label: "Overview", icon: LayoutDashboard, exact: true },
   { href: "/dashboard/projects", label: "Projects", icon: FolderKanban, exact: false },
+  { href: "/dashboard/activity", label: "Activity", icon: History, exact: false },
   { href: "/dashboard/settings", label: "Settings", icon: Settings, exact: false },
 ] as const;
 

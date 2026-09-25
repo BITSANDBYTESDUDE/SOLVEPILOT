@@ -332,6 +332,7 @@ section("Dashboard Data Structure", [
           total: 1,
         },
         recentProjects: [],
+        recentActivities: [],
         upcomingModules: {
           problems: "Task 11",
           aiAnalysis: "Task 16",

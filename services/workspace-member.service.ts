@@ -13,6 +13,7 @@ import {
   canManageWorkspaceMembers,
   canRemoveWorkspaceMember,
 } from "@/services/permission.service";
+import { createActivity } from "@/services/activity.service";
 import type { WorkspaceRole } from "@/types/domain";
 import {
   addWorkspaceMemberSchema,
@@ -151,6 +152,18 @@ export async function addWorkspaceMember(
     $push: { members: newMember },
   });
 
+  void createActivity({
+    workspaceId,
+    actorId: userId,
+    action: "member.added",
+    metadata: {
+      targetUserId: String(targetUser._id),
+      targetName: targetUser.name,
+      targetEmail: targetUser.email,
+      role,
+    },
+  });
+
   log.info("workspace member added", {
     workspaceId,
     targetUserId: String(targetUser._id),
@@ -246,6 +259,18 @@ export async function updateWorkspaceMemberRole(
     avatarUrl?: string | null;
   }>();
 
+  void createActivity({
+    workspaceId,
+    actorId: userId,
+    action: "member.role_changed",
+    metadata: {
+      targetUserId,
+      targetName: targetUser?.name,
+      previousRole: targetMember.role,
+      newRole,
+    },
+  });
+
   log.info("workspace member role updated", {
     workspaceId,
     targetUserId,
@@ -333,6 +358,16 @@ export async function removeWorkspaceMember(
       });
     }
   }
+
+  void createActivity({
+    workspaceId,
+    actorId: userId,
+    action: "member.removed",
+    metadata: {
+      targetUserId,
+      previousRole: targetMember.role,
+    },
+  });
 
   log.info("workspace member removed", {
     workspaceId,
