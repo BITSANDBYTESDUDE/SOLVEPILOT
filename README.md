@@ -321,13 +321,24 @@ verification flow and is deliberately not part of this task.
 A workspace is the tenancy root: projects, problems and everything under them belong to one.
 A user only ever reaches workspaces they are a member of.
 
-| Endpoint                 | Method | Result                                                    |
-| ------------------------ | ------ | --------------------------------------------------------- |
-| `/api/workspaces`        | GET    | `200` with the caller's workspaces and their role in each |
-| `/api/workspaces`        | POST   | `201`; the creator becomes its `owner`                    |
-| `/api/workspaces/[id]`   | GET    | `200` for members, `404` for everyone else                |
-| `/api/workspaces/[id]`   | PATCH  | Rename or change slug; requires `admin` or above          |
-| `/api/workspaces/active` | POST   | Selects the active workspace, after verifying membership  |
+| Endpoint                                    | Method | Result                                                        |
+| ------------------------------------------- | ------ | ------------------------------------------------------------- |
+| `/api/workspaces`                           | GET    | `200` with the caller's workspaces and their role in each     |
+| `/api/workspaces`                           | POST   | `201`; the creator becomes its `owner`                        |
+| `/api/workspaces/[id]`                      | GET    | `200` for members, `404` for everyone else                    |
+| `/api/workspaces/[id]`                      | PATCH  | Rename or change slug; requires `admin` or above              |
+| `/api/workspaces/[id]/members`              | GET    | `200` safe member list for workspace members                  |
+| `/api/workspaces/[id]/members`              | POST   | `201` adds member by email; requires `admin` or `owner`       |
+| `/api/workspaces/[id]/members/[userId]`     | PATCH  | `200` updates member role; owner/admin permission rules       |
+| `/api/workspaces/[id]/members/[userId]`     | DELETE | `200` removes member; owner/admin rules, owner protected      |
+| `/api/dashboard`                            | GET    | `200` real workspace statistics for caller's active workspace |
+| `/api/workspaces/[id]/dashboard`            | GET    | `200` real workspace statistics scoped to target workspace    |
+| `/api/workspaces/[id]/projects`             | GET    | `200` lists projects with search, status filter and sort      |
+| `/api/workspaces/[id]/projects`             | POST   | `201` creates project; requires `admin` or `owner`            |
+| `/api/workspaces/[id]/projects/[projectId]` | GET    | `200` project detail; strictly scoped to workspace            |
+| `/api/workspaces/[id]/projects/[projectId]` | PATCH  | `200` updates project or archives; `admin` or `owner`         |
+| `/api/workspaces/[id]/projects/[projectId]` | DELETE | `200` permanently deletes project; `admin` or `owner`         |
+| `/api/workspaces/active`                    | POST   | Selects the active workspace, after verifying membership      |
 
 **Tenancy is enforced in one place** (`lib/auth/workspace.ts`). Every workspace read goes
 through `requireWorkspaceMember()`, so no route can forget the check.
@@ -335,6 +346,13 @@ through `requireWorkspaceMember()`, so no route can forget the check.
 **Non-members get a 404, not a 403.** Answering "forbidden" would confirm the workspace
 exists, which would turn the endpoint into a probe for other tenants' ids. A member without
 the required role does get a 403 — membership is already established at that point.
+
+**Member management & permissions** (`services/permission.service.ts`, `services/workspace-member.service.ts`):
+
+- `owner`: full workspace control, can add/remove members, update roles, and view all data. Owner cannot be removed or downgraded if doing so leaves the workspace without an owner.
+- `admin`: can view members, add members, remove normal members, and promote members to admin. Admin cannot remove an owner, modify owner's role, promote anyone to owner, or remove another admin.
+- `member`: view-only access to workspace and member directory. Cannot add, remove, or change roles.
+- `IDOR prevention`: all membership operations re-validate caller membership against the target workspace in the database. Cross-workspace ID tampering fails with 404.
 
 **Slugs** are lowercase, hyphenated and unique across the deployment. Omit one and it is
 derived from the name; a collision becomes `acme-2`, `acme-3`, and so on. Route-colliding
@@ -457,9 +475,9 @@ SolvePilot is built incrementally, and the application stays runnable after ever
 | 04  | Implement authentication                                       | ✅ Done    |
 | 05  | User profile and preferences                                   | ✅ Done    |
 | 06  | Workspace creation                                             | ✅ Done    |
-| 07  | Workspace members and roles                                    | ⏳ Planned |
-| 08  | Projects                                                       | ⏳ Planned |
-| 09  | Dashboard statistics                                           | ⏳ Planned |
+| 07  | Workspace members and roles                                    | ✅ Done    |
+| 08  | Projects                                                       | ✅ Done    |
+| 09  | Dashboard statistics                                           | ✅ Done    |
 | 10  | Activity logging                                               | ⏳ Planned |
 | 11  | Issue/problem creation                                         | ⏳ Planned |
 | 12  | Issue list with search, filter, sort, pagination               | ⏳ Planned |

@@ -153,12 +153,17 @@ export interface ActivityMetadata {
  */
 export const ACTIVITY_ACTIONS = [
   "workspace.created",
+  "workspace.updated",
   "workspace.member_added",
   "workspace.member_removed",
   "workspace.member_role_changed",
+  "member.added",
+  "member.role_changed",
+  "member.removed",
   "project.created",
   "project.updated",
   "project.archived",
+  "project.deleted",
   "issue.created",
   "issue.updated",
   "issue.status_changed",
@@ -182,6 +187,18 @@ export const ACTIVITY_ACTIONS = [
   "report.shared",
 ] as const;
 export type ActivityAction = (typeof ACTIVITY_ACTIONS)[number];
+
+export const ACTIVITY_ACTION_TYPES = {
+  WORKSPACE_CREATED: "workspace.created",
+  WORKSPACE_UPDATED: "workspace.updated",
+  MEMBER_ADDED: "member.added",
+  MEMBER_ROLE_CHANGED: "member.role_changed",
+  MEMBER_REMOVED: "member.removed",
+  PROJECT_CREATED: "project.created",
+  PROJECT_UPDATED: "project.updated",
+  PROJECT_ARCHIVED: "project.archived",
+  PROJECT_DELETED: "project.deleted",
+} as const;
 
 export const NOTIFICATION_TYPES = [
   "issue_assigned",

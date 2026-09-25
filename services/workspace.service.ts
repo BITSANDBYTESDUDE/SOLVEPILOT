@@ -13,6 +13,7 @@ import { ConflictError, ValidationError } from "@/lib/errors";
 import { logger } from "@/lib/logger";
 import { slugify } from "@/lib/utils";
 import { Workspace, type WorkspaceMember } from "@/models";
+import { createActivity } from "@/services/activity.service";
 import { createWorkspaceSchema, updateWorkspaceSchema } from "@/validators/workspace";
 import type { WorkspaceRole } from "@/types/domain";
 
@@ -91,6 +92,17 @@ export async function createWorkspace(userId: string, input: unknown): Promise<W
   }
 
   log.info("workspace created", { userId, workspaceId: String(created._id) });
+
+  void createActivity({
+    workspaceId: String(created._id),
+    actorId: userId,
+    action: "workspace.created",
+    metadata: {
+      workspaceName: created.name,
+      slug: created.slug,
+    },
+  });
+
   return toSummary(created, "owner");
 }
 
@@ -151,6 +163,18 @@ export async function updateWorkspace(
   if (!updated) throw new ConflictError("That workspace could not be updated.");
 
   log.info("workspace updated", { userId, workspaceId, fields: Object.keys(updates) });
+
+  void createActivity({
+    workspaceId,
+    actorId: userId,
+    action: "workspace.updated",
+    metadata: {
+      changedFields: Object.keys(updates),
+      name: updated.name,
+      slug: updated.slug,
+    },
+  });
+
   return toSummary(updated, membership.role);
 }
 
