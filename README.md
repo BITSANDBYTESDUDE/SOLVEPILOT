@@ -416,10 +416,18 @@ npm run verify          # format:check + lint + typecheck + production build
 npm run db:verify       # 79 schema, index and serialization checks (15 collections)
 npm run auth:verify     # 39 checks: hashing, enumeration-proofing, session ids, cookie
 npm run profile:verify  # 26 checks: profile, avatar scheme, preferences, password rules
-npm run workspace:verify # 33 checks: slug rules, reserved slugs, roles, membership
+npm run workspace:verify # 78 checks: slug rules, reserved slugs, roles, membership
+npm run project:verify  # 47 checks: project rules, colours, owner/admin/member matrix
+npm run dashboard:verify # 16 checks: metric aggregation and workspace isolation
+npm run activity:verify # 34 checks: action types, metadata sanitization, indexes
+npm run issue:verify    # 80 checks: problem validation, schema, indexes, tenancy,
+                        #   server-controlled fields, activity metadata. With
+                        #   MONGODB_URI set it also runs the live service checks
+                        #   (creation per role, cross-workspace and cross-project
+                        #   rejection, issue.created activity, retrieval isolation).
 ```
 
-All three share one harness (`scripts/lib/verify-harness.ts`) and exit non-zero on any
+They share one harness (`scripts/lib/verify-harness.ts`) and exit non-zero on any
 failure, so they are safe to wire into CI.
 
 ---
@@ -478,8 +486,8 @@ SolvePilot is built incrementally, and the application stays runnable after ever
 | 07  | Workspace members and roles                                    | ✅ Done    |
 | 08  | Projects                                                       | ✅ Done    |
 | 09  | Dashboard statistics                                           | ✅ Done    |
-| 10  | Activity logging                                               | ⏳ Planned |
-| 11  | Issue/problem creation                                         | ⏳ Planned |
+| 10  | Activity logging                                               | ✅ Done    |
+| 11  | Issue/problem creation                                         | ✅ Done    |
 | 12  | Issue list with search, filter, sort, pagination               | ⏳ Planned |
 | 13  | Issue detail page                                              | ⏳ Planned |
 | 14  | Issue status workflow                                          | ⏳ Planned |
@@ -511,14 +519,22 @@ SolvePilot is built incrementally, and the application stays runnable after ever
 | 40  | Production readiness, deployment config and documentation      | ⏳ Planned |
 
 **Current state:** the foundation, architecture, database layer, authentication, user
-profile and workspaces are in place — design system, shared error/logger/config layers,
-marketing landing page, 15 Mongoose models with indexes (`npm run db:verify` → 79/79 schema
-checks pass), registration, sign-in and sign-out with revocable server-side sessions
-(`npm run auth:verify` → 39/39 checks pass), `/dashboard/settings` for profile, appearance
-and password (`npm run profile:verify` → 26/26 checks pass), and multi-workspace tenancy with
-a switcher (`npm run workspace:verify` → 33/33 checks pass). The whole `/dashboard` section is
-guarded by a single layout, so no page under it can forget its own check. No screenshots are
-included because the product UI beyond these screens does not exist yet.
+profile, workspaces, projects, dashboard statistics and activity logging are in place —
+design system, shared error/logger/config layers, marketing landing page, 15 Mongoose models
+with indexes (`npm run db:verify` → 79/79 schema checks pass), registration, sign-in and
+sign-out with revocable server-side sessions (`npm run auth:verify` → 39/39 checks pass),
+`/dashboard/settings` for profile, appearance and password (`npm run profile:verify` → 26/26
+checks pass), multi-workspace tenancy with a switcher (`npm run workspace:verify` → 78/78
+checks pass), and projects (`npm run project:verify` → 47/47 checks pass).
+
+Task 11 adds the first step of the problem-solving workflow: `/dashboard/issues` (list),
+`/dashboard/issues/new` (creation form) and `/dashboard/issues/[issueId]` (detail, with a
+visual AI Analysis placeholder — no model is called yet), backed by
+`POST|GET /api/workspaces/[id]/issues` and `services/issue.service.ts`
+(`npm run issue:verify` → 80/80 static checks pass, plus the live service checks when
+`MONGODB_URI` is set). The whole `/dashboard` section is guarded by a single layout, so no
+page under it can forget its own check. No screenshots are included because the product UI
+beyond these screens does not exist yet.
 
 ---
 

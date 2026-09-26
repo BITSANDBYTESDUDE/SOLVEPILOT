@@ -198,6 +198,7 @@ export const ACTIVITY_ACTION_TYPES = {
   PROJECT_UPDATED: "project.updated",
   PROJECT_ARCHIVED: "project.archived",
   PROJECT_DELETED: "project.deleted",
+  ISSUE_CREATED: "issue.created",
 } as const;
 
 export const NOTIFICATION_TYPES = [

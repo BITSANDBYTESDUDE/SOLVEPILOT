@@ -1,6 +1,6 @@
 "use client";
 
-import { FolderKanban, History, LayoutDashboard, Settings } from "lucide-react";
+import { CircleAlert, FolderKanban, History, LayoutDashboard, Settings } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 
 const LINKS = [
   { href: "/dashboard", label: "Overview", icon: LayoutDashboard, exact: true },
+  { href: "/dashboard/issues", label: "Problems", icon: CircleAlert, exact: false },
   { href: "/dashboard/projects", label: "Projects", icon: FolderKanban, exact: false },
   { href: "/dashboard/activity", label: "Activity", icon: History, exact: false },
   { href: "/dashboard/settings", label: "Settings", icon: Settings, exact: false },
@@ -17,8 +18,9 @@ const LINKS = [
  * Dashboard navigation (Task 05).
  *
  * Client component because the active link depends on the current path. Later
- * tasks (issues, projects, reports, activity) add entries here rather than
- * inventing a second navigation.
+ * tasks (reports, verification) add entries here rather than inventing a second
+ * navigation. `/dashboard/issues` (Task 11) covers `/dashboard/issues/new` and
+ * every problem detail route through its prefix match.
  */
 export function DashboardNav() {
   const pathname = usePathname();

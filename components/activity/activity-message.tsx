@@ -1,6 +1,7 @@
 import {
   Archive,
   Building2,
+  CircleAlert,
   FolderPlus,
   Pencil,
   Settings,
@@ -17,6 +18,8 @@ import type { ActivityAction } from "@/types/domain";
 
 export function getActivityIcon(action: ActivityAction) {
   switch (action) {
+    case "issue.created":
+      return <CircleAlert className="size-4 text-primary" aria-hidden="true" />;
     case "project.created":
       return <FolderPlus className="size-4 text-primary" aria-hidden="true" />;
     case "project.updated":
@@ -48,6 +51,27 @@ export function ActivityMessage({ activity }: { activity: SafeActivityItem }) {
   const actorName = actor.name || "A team member";
 
   switch (action) {
+    case "issue.created": {
+      const issueTitle = (metadata.title as string) || "a problem";
+      const issueId = activity.issueId ?? (metadata.issueId as string | undefined);
+
+      return (
+        <span>
+          <strong className="font-semibold text-foreground">{actorName}</strong> created problem{" "}
+          {issueId ? (
+            <Link
+              href={`/dashboard/issues/${issueId}`}
+              className="font-medium text-foreground underline-offset-4 hover:underline"
+            >
+              &ldquo;{issueTitle}&rdquo;
+            </Link>
+          ) : (
+            <span className="font-medium text-foreground">&ldquo;{issueTitle}&rdquo;</span>
+          )}
+        </span>
+      );
+    }
+
     case "project.created": {
       const projectName = (metadata.projectName as string) || "a project";
       const projectId = metadata.projectId as string | undefined;

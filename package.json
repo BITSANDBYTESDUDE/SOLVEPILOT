@@ -2,7 +2,7 @@
   "name": "solvepilot",
   "version": "0.1.0",
   "private": true,
-  "description": "SolvePilot — AI-powered problem resolution workspace. Your AI Guide from Problem to Solution.",
+  "description": "SolvePilot \u2014 AI-powered problem resolution workspace. Your AI Guide from Problem to Solution.",
   "engines": {
     "node": ">=20.9.0"
   },
@@ -24,7 +24,8 @@
     "members:verify": "NODE_OPTIONS=--conditions=react-server tsx scripts/workspace-verify.mts",
     "project:verify": "NODE_OPTIONS=--conditions=react-server tsx scripts/project-verify.mts",
     "dashboard:verify": "NODE_OPTIONS=--conditions=react-server tsx scripts/dashboard-verify.mts",
-    "activity:verify": "NODE_OPTIONS=--conditions=react-server tsx scripts/activity-verify.mts"
+    "activity:verify": "NODE_OPTIONS=--conditions=react-server tsx scripts/activity-verify.mts",
+    "issue:verify": "NODE_OPTIONS=--conditions=react-server tsx scripts/issue-verify.mts"
   },
   "dependencies": {
     "@radix-ui/react-label": "^2.1.15",
