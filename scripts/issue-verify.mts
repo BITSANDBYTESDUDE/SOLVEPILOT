@@ -1,15 +1,18 @@
 /**
- * Problem (issue) creation verification tooling (Task 11).
+ * Problem (issue) verification tooling (Task 11 creation, Task 12 list).
  *
  * Static sections (no database needed) cover: field validation, the Issue schema
  * and its indexes, the permission matrix, the server-controlled document build,
- * workspace/project authorization decisions, activity metadata and the shared
- * label/draft rules the form uses.
+ * workspace/project authorization decisions, activity metadata, the shared
+ * label/draft rules the form uses, and — for the list — query validation, filter
+ * construction, sort translation, pagination maths, search escaping and the
+ * URL-state codec.
  *
  * The live section (only when MONGODB_URI is set) exercises the real service:
  * creation as owner/admin/member, defaults, cross-workspace rejection,
- * cross-project rejection, the `issue.created` activity record and
- * retrieval isolation. Fixtures are created and removed by the script.
+ * cross-project rejection, the `issue.created` activity record, retrieval
+ * isolation, and search / filter / sort / pagination against a seeded data set.
+ * Fixtures are created and removed by the script.
  *
  * Usage:  npm run issue:verify
  */
@@ -19,27 +22,46 @@ import { Types, type Model } from "mongoose";
 
 import { findMembership } from "@/lib/auth/workspace";
 import {
+  ALL_FILTER,
+  countActiveIssueFilters,
+  DEFAULT_ISSUE_PAGE,
+  DEFAULT_ISSUE_PAGE_SIZE,
+  EMPTY_ISSUE_LIST_STATE,
   ISSUE_CATEGORY_OPTIONS,
   ISSUE_DESCRIPTION_MIN_LENGTH,
   ISSUE_PRIORITY_OPTIONS,
+  ISSUE_PRIORITY_WEIGHTS,
+  ISSUE_SORTS,
   ISSUE_STATUS_LABELS,
   ISSUE_TITLE_MIN_LENGTH,
   issueCategoryLabel,
   issueDraftErrors,
+  issueListQueryString,
+  issueListStateFromParams,
+  issueListStateToSearchParams,
+  issueListViewFromQuery,
   issuePriorityLabel,
   issueStatusLabel,
+  MAX_ISSUE_PAGE_SIZE,
+  NO_PROJECT_FILTER,
 } from "@/lib/constants/issues";
 import { connectToDatabase, disconnectFromDatabase, isDatabaseConfigured } from "@/lib/db/connect";
 import { AppError } from "@/lib/errors";
 import * as models from "@/models";
 import { sanitizeMetadata } from "@/services/activity.service";
+import { escapeRegex, normalizeSearchTerm } from "@/lib/utils/search";
 import {
   assertProjectInWorkspace,
   buildIssueDocument,
+  buildIssueListFilter,
+  buildIssuePagination,
+  buildIssueSort,
   createIssue,
   getIssueById,
   getWorkspaceIssues,
   issueCreatedMetadata,
+  issuePrioritySortStages,
+  type IssueFilters,
 } from "@/services/issue.service";
 import { canCreateIssue, canViewIssues } from "@/services/permission.service";
 import { ACTIVITY_ACTION_TYPES, ACTIVITY_ACTIONS, ISSUE_CATEGORIES } from "@/types/domain";
@@ -47,6 +69,7 @@ import {
   createIssueSchema,
   issueCategorySchema,
   issueDescriptionSchema,
+  issueListQuerySchema,
   issuePrioritySchema,
   issueProjectIdSchema,
   issueTitleSchema,
@@ -453,12 +476,12 @@ section("Issue indexes", [
     test: () => indexNamesOf(models.Issue).includes("workspaceId+status+createdAt"),
   },
   {
-    description: "workspaceId + priority",
-    test: () => indexNamesOf(models.Issue).includes("workspaceId+priority"),
+    description: "workspaceId + priority + createdAt",
+    test: () => indexNamesOf(models.Issue).includes("workspaceId+priority+createdAt"),
   },
   {
-    description: "workspaceId + category",
-    test: () => indexNamesOf(models.Issue).includes("workspaceId+category"),
+    description: "workspaceId + category + createdAt",
+    test: () => indexNamesOf(models.Issue).includes("workspaceId+category+createdAt"),
   },
   {
     description: "projectId + createdAt",
@@ -772,6 +795,476 @@ section("Create form rules", [
 ]);
 
 /* -------------------------------------------------------------------------- */
+/* 11. List query validation (Task 12)                                        */
+/* -------------------------------------------------------------------------- */
+
+section("List query defaults", [
+  {
+    description: "defaults to page 1, limit 20, newest first",
+    test: () => {
+      const parsed = issueListQuerySchema.parse({});
+      return (
+        parsed.page === DEFAULT_ISSUE_PAGE &&
+        parsed.limit === DEFAULT_ISSUE_PAGE_SIZE &&
+        parsed.sort === "created_desc" &&
+        parsed.search === undefined &&
+        parsed.status === undefined &&
+        parsed.priority === undefined &&
+        parsed.category === undefined &&
+        parsed.projectId === undefined
+      );
+    },
+  },
+  {
+    description: "accepts a custom page and limit (as strings, like a query string)",
+    test: () => {
+      const parsed = issueListQuerySchema.parse({ page: "3", limit: "50" });
+      return parsed.page === 3 && parsed.limit === 50;
+    },
+  },
+  {
+    description: `accepts the maximum limit of ${MAX_ISSUE_PAGE_SIZE}`,
+    test: () =>
+      issueListQuerySchema.parse({ limit: String(MAX_ISSUE_PAGE_SIZE) }).limit ===
+      MAX_ISSUE_PAGE_SIZE,
+  },
+  {
+    description: "rejects limit=5000 instead of returning 5000 records",
+    test: () => !issueListQuerySchema.safeParse({ limit: "5000" }).success,
+  },
+  {
+    description: "rejects page 0 and negative pages",
+    test: () =>
+      !issueListQuerySchema.safeParse({ page: "0" }).success &&
+      !issueListQuerySchema.safeParse({ page: "-2" }).success,
+  },
+  {
+    description: "rejects non-numeric page and limit",
+    test: () =>
+      !issueListQuerySchema.safeParse({ page: "abc" }).success &&
+      !issueListQuerySchema.safeParse({ limit: "many" }).success,
+  },
+  {
+    description: "treats blank parameters as absent",
+    test: () => {
+      const parsed = issueListQuerySchema.parse({ page: "", limit: "", search: "", sort: "" });
+      return parsed.page === 1 && parsed.limit === 20 && parsed.sort === "created_desc";
+    },
+  },
+  {
+    description: "ignores parameters it does not know",
+    test: () => {
+      const parsed = issueListQuerySchema.parse({ search: "navbar", evil: "yes" }) as Record<
+        string,
+        unknown
+      >;
+      return !("evil" in parsed);
+    },
+  },
+]);
+
+section("List filter validation", [
+  {
+    description: "accepts every status, including in_progress",
+    test: () =>
+      ["new", "analyzing", "planned", "in_progress", "verification", "resolved", "closed"].every(
+        (status) => issueListQuerySchema.safeParse({ status }).success,
+      ),
+  },
+  {
+    description: "accepts every priority and category",
+    test: () =>
+      ["low", "medium", "high", "critical"].every(
+        (priority) => issueListQuerySchema.safeParse({ priority }).success,
+      ) &&
+      ["technical", "ui", "business", "productivity", "academic", "other"].every(
+        (category) => issueListQuerySchema.safeParse({ category }).success,
+      ),
+  },
+  {
+    description: "rejects unknown filter values",
+    test: () =>
+      !issueListQuerySchema.safeParse({ status: "done" }).success &&
+      !issueListQuerySchema.safeParse({ priority: "urgent" }).success &&
+      !issueListQuerySchema.safeParse({ category: "design" }).success &&
+      !issueListQuerySchema.safeParse({ sort: "title" }).success,
+  },
+  {
+    description: "treats 'all' as no filter",
+    test: () => {
+      const parsed = issueListQuerySchema.parse({
+        status: "all",
+        priority: "all",
+        category: "all",
+        projectId: "all",
+      });
+      return (
+        parsed.status === undefined &&
+        parsed.priority === undefined &&
+        parsed.category === undefined &&
+        parsed.projectId === undefined
+      );
+    },
+  },
+  {
+    description: "accepts a project id or the 'none' sentinel, rejects anything else",
+    test: () => {
+      const id = objectId().toString();
+      return (
+        issueListQuerySchema.parse({ projectId: id }).projectId === id &&
+        issueListQuerySchema.parse({ projectId: NO_PROJECT_FILTER }).projectId ===
+          NO_PROJECT_FILTER &&
+        !issueListQuerySchema.safeParse({ projectId: "not-an-id" }).success
+      );
+    },
+  },
+  {
+    description: "rejects query-operator injection in place of a value",
+    test: () =>
+      !issueListQuerySchema.safeParse({ status: { $ne: null } }).success &&
+      !issueListQuerySchema.safeParse({ priority: { $in: ["low", "high"] } }).success &&
+      !issueListQuerySchema.safeParse({ projectId: { $where: "1" } }).success,
+  },
+  {
+    description: "trims the search term and caps its length",
+    test: () =>
+      issueListQuerySchema.parse({ search: "  navbar  " }).search === "navbar" &&
+      issueListQuerySchema.parse({ search: "" }).search === undefined &&
+      !issueListQuerySchema.safeParse({ search: "a".repeat(101) }).success,
+  },
+]);
+
+/* -------------------------------------------------------------------------- */
+/* 12. Search safety                                                          */
+/* -------------------------------------------------------------------------- */
+
+section("Search safety", [
+  {
+    description: "escapes regular-expression metacharacters",
+    test: () => escapeRegex("a.b*c") === "a\\.b\\*c",
+  },
+  {
+    description: "an escaped term matches literally, not as a pattern",
+    test: () => new RegExp(escapeRegex("button.*"), "i").test("Button alignment") === false,
+  },
+  {
+    description: "a hostile pattern cannot become an expensive expression",
+    test: () => {
+      const escaped = escapeRegex("(a+)+$");
+      return escaped.includes("\\(") && new RegExp(escaped, "i").test("(a+)+$") === true;
+    },
+  },
+  {
+    description: "normalizes whitespace and drops empty terms",
+    test: () =>
+      normalizeSearchTerm("  mobile   navbar ") === "mobile navbar" &&
+      normalizeSearchTerm("") === undefined &&
+      normalizeSearchTerm("    ") === undefined &&
+      normalizeSearchTerm(null) === undefined &&
+      normalizeSearchTerm(42) === undefined,
+  },
+  {
+    description: "drops terms longer than the maximum",
+    test: () => normalizeSearchTerm("a".repeat(101)) === undefined,
+  },
+]);
+
+/* -------------------------------------------------------------------------- */
+/* 13. Filter construction                                                    */
+/* -------------------------------------------------------------------------- */
+
+const workspaceIdForFilter = objectId().toString();
+
+section("List filter construction", [
+  {
+    description: "an unfiltered list is still scoped to the workspace",
+    test: () => {
+      const filter = buildIssueListFilter(workspaceIdForFilter, {});
+      return (
+        Object.keys(filter).length === 1 && String(filter.workspaceId) === workspaceIdForFilter
+      );
+    },
+  },
+  {
+    description: "a forged workspaceId in the filters cannot override the tenant",
+    test: () => {
+      const forged = { workspaceId: objectId().toString() } as unknown as IssueFilters;
+      const filter = buildIssueListFilter(workspaceIdForFilter, forged);
+      return String(filter.workspaceId) === workspaceIdForFilter;
+    },
+  },
+  {
+    description: "search becomes an escaped, case-insensitive match on title and description",
+    test: () => {
+      const filter = buildIssueListFilter(workspaceIdForFilter, { search: "Navbar!" });
+      const clauses = filter.$or as Array<Record<string, { $regex: string; $options: string }>>;
+      return (
+        Array.isArray(clauses) &&
+        clauses.length === 2 &&
+        clauses.every(
+          (clause) =>
+            Object.values(clause)[0]?.$options === "i" &&
+            Object.values(clause)[0]?.$regex === "Navbar!",
+        )
+      );
+    },
+  },
+  {
+    description: "regex metacharacters in a search term stay literal",
+    test: () => {
+      const filter = buildIssueListFilter(workspaceIdForFilter, { search: "button.*" });
+      const clauses = filter.$or as Array<Record<string, { $regex: string }>>;
+      const pattern = clauses[0] && Object.values(clauses[0])[0]?.$regex;
+      return (
+        typeof pattern === "string" && new RegExp(pattern, "i").test("Button alignment") === false
+      );
+    },
+  },
+  {
+    description: "status, priority and category become equality matches",
+    test: () => {
+      const filter = buildIssueListFilter(workspaceIdForFilter, {
+        status: "in_progress",
+        priority: "critical",
+        category: "technical",
+      });
+      return (
+        filter.status === "in_progress" &&
+        filter.priority === "critical" &&
+        filter.category === "technical"
+      );
+    },
+  },
+  {
+    description: "'none' selects problems with no project",
+    test: () =>
+      buildIssueListFilter(workspaceIdForFilter, { projectId: NO_PROJECT_FILTER }).projectId ===
+      null,
+  },
+  {
+    description: "a project id becomes an ObjectId",
+    test: () => {
+      const projectId = objectId().toString();
+      const value = buildIssueListFilter(workspaceIdForFilter, { projectId }).projectId;
+      return value instanceof Types.ObjectId && String(value) === projectId;
+    },
+  },
+  {
+    description: "a malformed project id is dropped rather than queried",
+    test: () =>
+      !("projectId" in buildIssueListFilter(workspaceIdForFilter, { projectId: "garbage" })),
+  },
+  {
+    description: "a combined query keeps every narrowing",
+    test: () => {
+      const projectId = objectId().toString();
+      const filter = buildIssueListFilter(workspaceIdForFilter, {
+        search: "navbar",
+        status: "new",
+        priority: "high",
+        category: "ui",
+        projectId,
+      });
+      return (
+        Object.keys(filter).sort().join(",") ===
+        "$or,category,priority,projectId,status,workspaceId"
+      );
+    },
+  },
+]);
+
+/* -------------------------------------------------------------------------- */
+/* 14. Sorting                                                                */
+/* -------------------------------------------------------------------------- */
+
+section("List sorting", [
+  {
+    description: "newest / oldest sort by createdAt",
+    test: () =>
+      buildIssueSort("created_desc").sort?.createdAt === -1 &&
+      buildIssueSort("created_asc").sort?.createdAt === 1,
+  },
+  {
+    description: "recently updated sorts by updatedAt",
+    test: () => buildIssueSort("updated_desc").sort?.updatedAt === -1,
+  },
+  {
+    description: "title sorts A→Z and Z→A",
+    test: () =>
+      buildIssueSort("title_asc").sort?.title === 1 &&
+      buildIssueSort("title_desc").sort?.title === -1,
+  },
+  {
+    description: "every stored-field sort carries an _id tie-breaker for stable pages",
+    test: () =>
+      (["created_desc", "created_asc", "updated_desc", "title_asc", "title_desc"] as const).every(
+        (sort) => buildIssueSort(sort).sort?._id !== undefined,
+      ),
+  },
+  {
+    description: "priority sorts are computed in the query, not sorted alphabetically",
+    test: () =>
+      buildIssueSort("priority_desc").sort === null &&
+      buildIssueSort("priority_desc").priorityDirection === -1 &&
+      buildIssueSort("priority_asc").priorityDirection === 1,
+  },
+  {
+    description: "priority ranks follow the product weights (critical 4 … low 1)",
+    test: () => {
+      const stages = issuePrioritySortStages(-1);
+      const sortStage = stages[1] as { $sort: Record<string, number> };
+      const addFields = JSON.stringify(stages[0]) as string;
+      return (
+        ISSUE_PRIORITY_WEIGHTS.critical === 4 &&
+        ISSUE_PRIORITY_WEIGHTS.high === 3 &&
+        ISSUE_PRIORITY_WEIGHTS.medium === 2 &&
+        ISSUE_PRIORITY_WEIGHTS.low === 1 &&
+        sortStage.$sort.priorityRank === -1 &&
+        addFields.includes('"$switch"') &&
+        issuePrioritySortStages(1)[1] !== undefined
+      );
+    },
+  },
+  {
+    description: "every supported sort key is accepted by the API",
+    test: () => ISSUE_SORTS.every((sort) => issueListQuerySchema.safeParse({ sort }).success),
+  },
+]);
+
+/* -------------------------------------------------------------------------- */
+/* 15. Pagination                                                             */
+/* -------------------------------------------------------------------------- */
+
+section("Pagination maths", [
+  {
+    description: "an empty result set still reports one page",
+    test: () => {
+      const pagination = buildIssuePagination(1, 20, 0);
+      return (
+        pagination.total === 0 &&
+        pagination.totalPages === 1 &&
+        pagination.hasNextPage === false &&
+        pagination.hasPreviousPage === false
+      );
+    },
+  },
+  {
+    description: "75 problems at 20 per page is 4 pages",
+    test: () => {
+      const pagination = buildIssuePagination(1, 20, 75);
+      return (
+        pagination.totalPages === 4 &&
+        pagination.hasNextPage === true &&
+        pagination.hasPreviousPage === false
+      );
+    },
+  },
+  {
+    description: "the last page has no next page",
+    test: () => {
+      const pagination = buildIssuePagination(4, 20, 75);
+      return pagination.hasNextPage === false && pagination.hasPreviousPage === true;
+    },
+  },
+  {
+    description: "a middle page has both neighbours",
+    test: () => {
+      const pagination = buildIssuePagination(2, 20, 75);
+      return pagination.hasNextPage === true && pagination.hasPreviousPage === true;
+    },
+  },
+  {
+    description: "an exact multiple needs no extra page",
+    test: () => buildIssuePagination(1, 20, 40).totalPages === 2,
+  },
+]);
+
+/* -------------------------------------------------------------------------- */
+/* 16. URL state                                                              */
+/* -------------------------------------------------------------------------- */
+
+section("List URL state", [
+  {
+    description: "the default state produces no query string",
+    test: () => issueListStateToSearchParams(EMPTY_ISSUE_LIST_STATE).toString() === "",
+  },
+  {
+    description: "a narrowed state round-trips through the URL",
+    test: () => {
+      const projectId = objectId().toString();
+      const state = {
+        search: "navbar",
+        status: "new" as const,
+        priority: "high" as const,
+        category: "ui" as const,
+        projectId,
+        sort: "priority_desc" as const,
+        page: 2,
+      };
+      const params = issueListStateToSearchParams(state);
+      const restored = issueListStateFromParams(params);
+      return (
+        restored.search === "navbar" &&
+        restored.status === "new" &&
+        restored.priority === "high" &&
+        restored.category === "ui" &&
+        restored.projectId === projectId &&
+        restored.sort === "priority_desc" &&
+        restored.page === 2
+      );
+    },
+  },
+  {
+    description: "unknown values in a shared link fall back to defaults",
+    test: () => {
+      const state = issueListStateFromParams({
+        status: "done",
+        sort: "nope",
+        page: "-3",
+        category: "design",
+      });
+      return (
+        state.status === ALL_FILTER &&
+        state.sort === "created_desc" &&
+        state.page === 1 &&
+        state.category === ALL_FILTER
+      );
+    },
+  },
+  {
+    description: "counts the active filters",
+    test: () =>
+      countActiveIssueFilters(EMPTY_ISSUE_LIST_STATE) === 0 &&
+      countActiveIssueFilters({
+        ...EMPTY_ISSUE_LIST_STATE,
+        search: "x",
+        status: "new",
+        projectId: NO_PROJECT_FILTER,
+      }) === 3,
+  },
+  {
+    description: "builds a shareable path",
+    test: () =>
+      issueListQueryString(EMPTY_ISSUE_LIST_STATE) === "/dashboard/issues" &&
+      issueListQueryString({ ...EMPTY_ISSUE_LIST_STATE, search: "navbar", page: 2 }) ===
+        "/dashboard/issues?search=navbar&page=2",
+  },
+  {
+    description: "a normalized service query maps back onto the controls",
+    test: () => {
+      const view = issueListViewFromQuery({ sort: "created_desc", page: 1 });
+      return (
+        view.search === "" &&
+        view.status === ALL_FILTER &&
+        view.priority === ALL_FILTER &&
+        view.category === ALL_FILTER &&
+        view.projectId === ALL_FILTER
+      );
+    },
+  },
+]);
+
+/* -------------------------------------------------------------------------- */
 /* 11. Run the static suite                                                   */
 /* -------------------------------------------------------------------------- */
 
@@ -786,8 +1279,9 @@ console.log("\nLive service checks");
 if (!isDatabaseConfigured()) {
   console.log("  · skipped: set MONGODB_URI in .env.local to run the service-level checks");
   console.log(
-    "    (creation per role, cross-workspace and cross-project rejection, activity, retrieval)",
+    "    (creation per role, cross-workspace and cross-project rejection, activity, retrieval,",
   );
+  console.log("     plus search, filters, sorting, pagination and isolation over seeded data)");
 } else {
   console.log("  · running against the configured database");
 
@@ -835,8 +1329,357 @@ if (!isDatabaseConfigured()) {
     createdBy: outsider._id,
   });
 
+  const projectA2 = await models.Project.create({
+    workspaceId: workspaceA._id,
+    name: "Mobile App",
+    createdBy: owner._id,
+  });
+
   const liveHarness = new VerifyHarness();
   const createdIssueIds: string[] = [];
+
+  /**
+   * A deterministic data set for the list checks (Task 12).
+   *
+   * Written straight to the collection so the assertions can rely on exact
+   * priorities, statuses, projects and timestamps — the service always creates
+   * problems as `new` / `text`, which would make every ordering test identical.
+   */
+  const day = 24 * 60 * 60 * 1000;
+  const seededAt = Date.now() - 10 * day;
+  const seedSpecs = [
+    {
+      key: "navbar",
+      title: "Mobile navbar broken",
+      description: "The navigation menu overflows the viewport on phones.",
+      priority: "high" as const,
+      status: "new" as const,
+      category: "ui" as const,
+      projectId: projectA._id,
+      age: 5,
+    },
+    {
+      key: "login",
+      title: "Login redirect issue",
+      description: "Users land in a redirect loop after signing in.",
+      priority: "critical" as const,
+      status: "planned" as const,
+      category: "technical" as const,
+      projectId: projectA2._id,
+      age: 4,
+    },
+    {
+      key: "button",
+      title: "Button alignment",
+      description: "Buttons overlap on small screens.",
+      priority: "medium" as const,
+      status: "resolved" as const,
+      category: "ui" as const,
+      projectId: projectA._id,
+      age: 3,
+    },
+    {
+      key: "export",
+      title: "Export report timeout",
+      description: "The export never finishes for large workspaces.",
+      priority: "low" as const,
+      status: "new" as const,
+      category: "technical" as const,
+      projectId: null,
+      age: 2,
+    },
+    {
+      key: "email",
+      title: "Onboarding email wording",
+      description: "There is a typo in the welcome email.",
+      priority: "medium" as const,
+      status: "closed" as const,
+      category: "business" as const,
+      projectId: null,
+      age: 1,
+    },
+  ];
+
+  const seeded: Record<string, Types.ObjectId> = {};
+  for (const spec of seedSpecs) {
+    const createdAt = new Date(seededAt + spec.age * day);
+    const doc = await models.Issue.create({
+      workspaceId: workspaceA._id,
+      projectId: spec.projectId,
+      createdBy: member._id,
+      title: spec.title,
+      description: spec.description,
+      category: spec.category,
+      status: spec.status,
+      priority: spec.priority,
+      source: "text",
+      createdAt,
+      updatedAt: createdAt,
+    });
+    if (spec.key) seeded[spec.key] = doc._id as Types.ObjectId;
+  }
+
+  const idOf = (key: string) => String(seeded[key] ?? "");
+
+  /** Titles in the order the list returned them. */
+  const titlesOf = (issues: Array<{ id: string; title: string }>, keys: string[]) =>
+    issues.map((issue) => keys.find((key) => idOf(key) === issue.id) ?? issue.title);
+
+  const listAs = (
+    query: Record<string, unknown> = {},
+    as: Types.ObjectId = member._id,
+    workspace: Types.ObjectId = workspaceA._id,
+  ) => getWorkspaceIssues(String(as), String(workspace), query);
+
+  liveHarness.section("List: pagination", [
+    {
+      description: "defaults to page 1 with 20 per page, newest first",
+      test: async () => {
+        const result = await listAs({});
+        return (
+          result.pagination.page === 1 &&
+          result.pagination.limit === 20 &&
+          result.pagination.total === 5 &&
+          result.pagination.totalPages === 1 &&
+          result.pagination.hasNextPage === false &&
+          result.pagination.hasPreviousPage === false &&
+          titlesOf(result.issues, ["email", "export", "button", "login", "navbar"]).join(",") ===
+            "email,export,button,login,navbar"
+        );
+      },
+    },
+    {
+      description: "honours a custom page and limit",
+      test: async () => {
+        const page1 = await listAs({ page: 1, limit: 2 });
+        const page2 = await listAs({ page: 2, limit: 2 });
+        const page3 = await listAs({ page: 3, limit: 2 });
+        return (
+          page1.pagination.total === 5 &&
+          page1.pagination.totalPages === 3 &&
+          page1.pagination.hasNextPage === true &&
+          titlesOf(page1.issues, ["email", "export"]).join(",") === "email,export" &&
+          titlesOf(page2.issues, ["button", "login"]).join(",") === "button,login" &&
+          page2.pagination.hasPreviousPage === true &&
+          page3.issues.length === 1 &&
+          page3.pagination.hasNextPage === false
+        );
+      },
+    },
+    {
+      description: "never returns more than the maximum page size",
+      test: async () => {
+        const result = await listAs({ limit: 100 });
+        return result.pagination.limit === 100 && result.issues.length <= 100;
+      },
+    },
+    {
+      description: "rejects limit=5000 and page=0",
+      test: async () =>
+        (await thrown(() => listAs({ limit: 5000 })))?.statusCode === 400 &&
+        (await thrown(() => listAs({ page: 0 })))?.statusCode === 400,
+    },
+  ]);
+
+  liveHarness.section("List: search", [
+    {
+      description: "finds a match in the title",
+      test: async () => {
+        const result = await listAs({ search: "navbar" });
+        return result.pagination.total === 1 && result.issues[0]?.id === idOf("navbar");
+      },
+    },
+    {
+      description: "finds a match in the description",
+      test: async () => {
+        const result = await listAs({ search: "welcome email" });
+        return result.pagination.total === 1 && result.issues[0]?.id === idOf("email");
+      },
+    },
+    {
+      description: "is case-insensitive",
+      test: async () =>
+        (await listAs({ search: "NAVBAR" })).pagination.total === 1 &&
+        (await listAs({ search: "Button ALIGNMENT" })).pagination.total === 1,
+    },
+    {
+      description: "an empty search returns everything",
+      test: async () => (await listAs({ search: "" })).pagination.total === 5,
+    },
+    {
+      description: "regex metacharacters are matched literally, not as a pattern",
+      test: async () => (await listAs({ search: "button.*" })).pagination.total === 0,
+    },
+    {
+      description: "a search with no matches reports zero results",
+      test: async () => {
+        const result = await listAs({ search: "zzz-no-such-problem" });
+        return result.pagination.total === 0 && result.issues.length === 0;
+      },
+    },
+  ]);
+
+  liveHarness.section("List: filters", [
+    {
+      description: "filters by status",
+      test: async () => {
+        const result = await listAs({ status: "new" });
+        return (
+          result.pagination.total === 2 && result.issues.every((issue) => issue.status === "new")
+        );
+      },
+    },
+    {
+      description: "filters by priority",
+      test: async () => {
+        const result = await listAs({ priority: "critical" });
+        return result.pagination.total === 1 && result.issues[0]?.id === idOf("login");
+      },
+    },
+    {
+      description: "filters by category",
+      test: async () => {
+        const result = await listAs({ category: "ui" });
+        return (
+          result.pagination.total === 2 && result.issues.every((issue) => issue.category === "ui")
+        );
+      },
+    },
+    {
+      description: "filters by project",
+      test: async () => {
+        const inProjectA = await listAs({ projectId: String(projectA._id) });
+        const inProjectA2 = await listAs({ projectId: String(projectA2._id) });
+        return (
+          inProjectA.pagination.total === 2 &&
+          inProjectA.issues.every((issue) => issue.projectId === String(projectA._id)) &&
+          inProjectA2.pagination.total === 1 &&
+          inProjectA2.issues[0]?.id === idOf("login")
+        );
+      },
+    },
+    {
+      description: "filters problems that have no project",
+      test: async () => {
+        const result = await listAs({ projectId: "none" });
+        return (
+          result.pagination.total === 2 && result.issues.every((issue) => issue.projectId === null)
+        );
+      },
+    },
+    {
+      description: "rejects a project from another workspace as a filter",
+      test: async () =>
+        (await thrown(() => listAs({ projectId: String(projectB._id) })))?.statusCode === 403,
+    },
+    {
+      description: "rejects an unknown status value",
+      test: async () => (await thrown(() => listAs({ status: "done" })))?.statusCode === 400,
+    },
+  ]);
+
+  liveHarness.section("List: sorting", [
+    {
+      description: "oldest first reverses newest first",
+      test: async () => {
+        const oldest = await listAs({ sort: "created_asc" });
+        return (
+          titlesOf(oldest.issues, ["navbar", "login", "button", "export", "email"]).join(",") ===
+          "navbar,login,button,export,email"
+        );
+      },
+    },
+    {
+      description: "recently updated puts the touched problem first",
+      test: async () => {
+        await models.Issue.updateOne({ _id: seeded.navbar }, { $set: { status: "new" } });
+        const result = await listAs({ sort: "updated_desc" });
+        return result.issues[0]?.id === idOf("navbar");
+      },
+    },
+    {
+      description: "priority high → low orders by weight, not alphabetically",
+      test: async () => {
+        const result = await listAs({ sort: "priority_desc" });
+        const priorities = result.issues.map((issue) => issue.priority);
+        return (
+          priorities[0] === "critical" &&
+          priorities[1] === "high" &&
+          priorities[priorities.length - 1] === "low"
+        );
+      },
+    },
+    {
+      description: "priority low → high reverses it",
+      test: async () => {
+        const result = await listAs({ sort: "priority_asc" });
+        const priorities = result.issues.map((issue) => issue.priority);
+        return priorities[0] === "low" && priorities[priorities.length - 1] === "critical";
+      },
+    },
+    {
+      description: "title A→Z and Z→A",
+      test: async () => {
+        const ascending = await listAs({ sort: "title_asc" });
+        const descending = await listAs({ sort: "title_desc" });
+        return (
+          ascending.issues[0]?.id === idOf("button") && descending.issues[0]?.id === idOf("email")
+        );
+      },
+    },
+  ]);
+
+  liveHarness.section("List: combined queries and isolation", [
+    {
+      description: "search + status + category + project + sort + pagination together",
+      test: async () => {
+        const result = await listAs({
+          search: "report",
+          status: "new",
+          category: "technical",
+          projectId: "none",
+          sort: "created_desc",
+          page: 1,
+          limit: 10,
+        });
+        return result.pagination.total === 1 && result.issues[0]?.id === idOf("export");
+      },
+    },
+    {
+      description: "filters that match nothing return an empty page, not an error",
+      test: async () => {
+        const result = await listAs({ status: "verification", priority: "critical" });
+        return result.pagination.total === 0 && result.issues.length === 0;
+      },
+    },
+    {
+      description: "a non-member cannot list another workspace's problems",
+      test: async () => (await thrown(() => listAs({}, outsider._id, workspaceA._id))) !== null,
+    },
+    {
+      description: "a member only ever sees their own workspace's problems",
+      test: async () => {
+        const result = await listAs({}, member._id, workspaceA._id);
+        return result.issues.every((issue) => issue.workspaceId === String(workspaceA._id));
+      },
+    },
+    {
+      description: "a workspace with no problems reports an empty page",
+      test: async () => {
+        const result = await listAs({}, outsider._id, workspaceB._id);
+        return result.pagination.total === 0 && result.issues.length === 0;
+      },
+    },
+    {
+      description: "a problem from another workspace cannot be opened by id",
+      test: async () =>
+        (
+          await thrown(() =>
+            getIssueById(String(outsider._id), String(workspaceB._id), idOf("navbar")),
+          )
+        )?.statusCode === 404,
+    },
+  ]);
 
   liveHarness.section("Creation by role", [
     {
@@ -1075,14 +1918,15 @@ if (!isDatabaseConfigured()) {
     {
       description: "the workspace list contains only its own problems",
       test: async () => {
-        const [issuesA, issuesB] = await Promise.all([
+        const [listA, listB] = await Promise.all([
           getWorkspaceIssues(String(member._id), String(workspaceA._id)),
           getWorkspaceIssues(String(outsider._id), String(workspaceB._id)),
         ]);
         return (
-          issuesA.length >= 4 &&
-          issuesA.every((issue) => issue.workspaceId === String(workspaceA._id)) &&
-          issuesB.length === 0
+          listA.issues.length >= 4 &&
+          listA.issues.every((issue) => issue.workspaceId === String(workspaceA._id)) &&
+          listB.issues.length === 0 &&
+          listB.pagination.total === 0
         );
       },
     },

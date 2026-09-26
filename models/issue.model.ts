@@ -69,18 +69,32 @@ const issueSchema = new Schema<IssueDocument>(
  * Indexes, one per query the product actually issues.
  *
  * Every read is scoped to the caller's workspace first, so each compound index
- * leads with `workspaceId`; `projectId`/`createdBy` cover the two remaining
- * access paths (a project's problems, "problems I created"). Indexes for
- * assignment and resolution reporting are added together with the tasks that
- * query them, rather than pre-created here.
+ * leads with `workspaceId`. The filter indexes carry `createdAt` as their last
+ * key because the list page filters *and* orders by recency in the same query —
+ * without it MongoDB would match on the index and then sort in memory.
+ *
+ * Deliberately absent: a `workspaceId + projectId + createdAt` index. Project
+ * filters are already served exactly by `projectId + createdAt`, since a project
+ * belongs to a single workspace and the equality match lands on the same
+ * documents. Assignee and resolution-report indexes arrive with the tasks that
+ * query them.
+ *
+ * Priority *ordering* is computed in the query (see `issuePrioritySortStages`),
+ * not stored, so no index tries to sort the enum alphabetically.
  */
 issueSchema.index({ workspaceId: 1, createdAt: -1 }, { name: "workspace_recent" });
 issueSchema.index(
   { workspaceId: 1, status: 1, createdAt: -1 },
   { name: "workspace_status_recent" },
 );
-issueSchema.index({ workspaceId: 1, priority: 1 }, { name: "workspace_priority" });
-issueSchema.index({ workspaceId: 1, category: 1 }, { name: "workspace_category" });
+issueSchema.index(
+  { workspaceId: 1, priority: 1, createdAt: -1 },
+  { name: "workspace_priority_recent" },
+);
+issueSchema.index(
+  { workspaceId: 1, category: 1, createdAt: -1 },
+  { name: "workspace_category_recent" },
+);
 issueSchema.index({ projectId: 1, createdAt: -1 }, { name: "project_recent" });
 issueSchema.index({ createdBy: 1, createdAt: -1 }, { name: "creator_recent" });
 issueSchema.index(

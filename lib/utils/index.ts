@@ -9,3 +9,4 @@ export {
   toPercentage,
   truncate,
 } from "./format";
+export { escapeRegex, literalRegex, MAX_SEARCH_TERM_LENGTH, normalizeSearchTerm } from "./search";

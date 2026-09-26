@@ -2,16 +2,24 @@ import { Types } from "mongoose";
 import { z } from "zod";
 
 import {
+  ALL_FILTER,
   DEFAULT_ISSUE_CATEGORY,
   DEFAULT_ISSUE_PRIORITY,
+  DEFAULT_ISSUE_PAGE,
+  DEFAULT_ISSUE_PAGE_SIZE,
+  DEFAULT_ISSUE_SORT,
   ISSUE_DESCRIPTION_MAX_LENGTH,
   ISSUE_DESCRIPTION_MESSAGES,
   ISSUE_DESCRIPTION_MIN_LENGTH,
+  ISSUE_SORTS,
   ISSUE_TITLE_MAX_LENGTH,
   ISSUE_TITLE_MESSAGES,
   ISSUE_TITLE_MIN_LENGTH,
+  MAX_ISSUE_PAGE_SIZE,
+  NO_PROJECT_FILTER,
 } from "@/lib/constants/issues";
-import { ISSUE_CATEGORIES, ISSUE_PRIORITIES } from "@/types/domain";
+import { MAX_SEARCH_TERM_LENGTH } from "@/lib/utils/search";
+import { ISSUE_CATEGORIES, ISSUE_PRIORITIES, ISSUE_STATUSES } from "@/types/domain";
 
 /**
  * Problem (issue) validation schemas (Task 11).
@@ -108,3 +116,101 @@ export const SERVER_CONTROLLED_ISSUE_FIELDS = [
   "createdAt",
   "updatedAt",
 ] as const;
+
+/* -------------------------------------------------------------------------- */
+/* List query (Task 12)                                                        */
+/* -------------------------------------------------------------------------- */
+
+/** Blank and `"all"` both mean "no filter applied". */
+function blankOrAll(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  return ["", ALL_FILTER].includes(value.trim().toLowerCase()) ? undefined : value;
+}
+
+/** Blank means "use the default" rather than "coerce to 0 and fail". */
+function blank(value: unknown): unknown {
+  return typeof value === "string" && value.trim() === "" ? undefined : value;
+}
+
+export const issueStatusSchema = z.enum(ISSUE_STATUSES, {
+  message: "Choose a valid status.",
+});
+
+export const issueSortSchema = z.enum(ISSUE_SORTS, {
+  message: "Choose a valid sort order.",
+});
+
+/**
+ * Search term: trimmed, length-bounded.
+ *
+ * Escaping happens where the term becomes a query (see `lib/utils/search.ts`),
+ * so a term can never turn into regex operators.
+ */
+export const issueSearchSchema = z.preprocess(
+  blank,
+  z
+    .string({ message: "Search must be text." })
+    .trim()
+    .max(MAX_SEARCH_TERM_LENGTH, `Search must be ${MAX_SEARCH_TERM_LENGTH} characters or fewer.`)
+    .optional(),
+);
+
+export const issueStatusFilterSchema = z.preprocess(blankOrAll, issueStatusSchema.optional());
+
+export const issuePriorityFilterSchema = z.preprocess(blankOrAll, issuePrioritySchema.optional());
+
+export const issueCategoryFilterSchema = z.preprocess(blankOrAll, issueCategorySchema.optional());
+
+/**
+ * Project filter: an ObjectId, or `"none"` for problems with no project.
+ *
+ * The id is format-checked here and ownership-checked in the service, so a
+ * project from another workspace can never be used as a filter.
+ */
+export const issueProjectFilterSchema = z.preprocess(
+  blankOrAll,
+  z
+    .string({ message: "Select a valid project." })
+    .refine(
+      (value) => value === NO_PROJECT_FILTER || Types.ObjectId.isValid(value),
+      "Select a valid project.",
+    )
+    .optional(),
+);
+
+export const issuePageSchema = z.preprocess(
+  blank,
+  z.coerce
+    .number({ message: "Page must be a number." })
+    .int("Page must be a whole number.")
+    .min(1, "Page must be at least 1.")
+    .default(DEFAULT_ISSUE_PAGE),
+);
+
+/**
+ * Page size. Values above the maximum are rejected rather than silently
+ * truncated, matching `activityQuerySchema`: a client asking for 5,000 records
+ * has a bug, and guessing what it meant hides it.
+ */
+export const issueLimitSchema = z.preprocess(
+  blank,
+  z.coerce
+    .number({ message: "Limit must be a number." })
+    .int("Limit must be a whole number.")
+    .min(1, "Limit must be at least 1.")
+    .max(MAX_ISSUE_PAGE_SIZE, `Limit cannot exceed ${MAX_ISSUE_PAGE_SIZE}.`)
+    .default(DEFAULT_ISSUE_PAGE_SIZE),
+);
+
+export const issueListQuerySchema = z.object({
+  search: issueSearchSchema,
+  status: issueStatusFilterSchema,
+  priority: issuePriorityFilterSchema,
+  category: issueCategoryFilterSchema,
+  projectId: issueProjectFilterSchema,
+  sort: z.preprocess(blank, issueSortSchema.default(DEFAULT_ISSUE_SORT)),
+  page: issuePageSchema,
+  limit: issueLimitSchema,
+});
+
+export type IssueListQuery = z.infer<typeof issueListQuerySchema>;

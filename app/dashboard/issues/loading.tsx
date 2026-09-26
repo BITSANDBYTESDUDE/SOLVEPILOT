@@ -1,6 +1,7 @@
+import { IssueListSkeleton } from "@/components/issues/issue-table";
 import { Skeleton } from "@/components/ui/skeleton";
 
-/** Loading state for the problem list. */
+/** Loading state for the problem list: header, toolbar, filters and one page. */
 export default function IssuesLoading() {
   return (
     <div className="flex flex-col gap-6" aria-busy="true" aria-live="polite">
@@ -14,19 +15,27 @@ export default function IssuesLoading() {
         <Skeleton className="h-9 w-40 rounded-md" />
       </div>
 
-      <div className="flex flex-col rounded-xl border bg-card">
-        <Skeleton className="h-11 w-full rounded-t-xl" />
-        {Array.from({ length: 6 }).map((_, index) => (
-          <div key={index} className="flex items-center gap-4 border-t px-4 py-4">
-            <Skeleton className="h-4 w-1/3" />
-            <Skeleton className="h-4 w-24" />
-            <Skeleton className="h-5 w-20 rounded-md" />
-            <Skeleton className="h-5 w-16 rounded-md" />
-            <Skeleton className="h-5 w-16 rounded-md" />
-            <Skeleton className="h-4 w-20" />
-          </div>
-        ))}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+        <Skeleton className="h-9 flex-1 rounded-md" />
+        <div className="flex items-center gap-2">
+          <Skeleton className="h-9 w-28 rounded-md" />
+          <Skeleton className="h-9 w-44 rounded-md" />
+        </div>
       </div>
+
+      <div className="flex flex-col gap-4 rounded-xl border bg-card p-4">
+        <Skeleton className="h-4 w-24" />
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {Array.from({ length: 4 }).map((_, index) => (
+            <div key={index} className="flex flex-col gap-2">
+              <Skeleton className="h-3 w-16" />
+              <Skeleton className="h-9 rounded-md" />
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <IssueListSkeleton rows={5} />
     </div>
   );
 }

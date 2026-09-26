@@ -6,6 +6,7 @@ import { requireWorkspaceMember } from "@/lib/auth/workspace";
 import { connectToDatabase } from "@/lib/db/connect";
 import { ForbiddenError, NotFoundError, ValidationError } from "@/lib/errors";
 import { logger } from "@/lib/logger";
+import { escapeRegex } from "@/lib/utils/search";
 import { Project, User, type ProjectDocument } from "@/models";
 import { canCreateProject, canDeleteProject, canEditProject } from "@/services/permission.service";
 import { createActivity } from "@/services/activity.service";
@@ -34,10 +35,6 @@ export interface ProjectSummary {
 
 export interface ProjectDetail extends ProjectSummary {
   creatorEmail?: string;
-}
-
-function escapeRegex(text: string): string {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 /**

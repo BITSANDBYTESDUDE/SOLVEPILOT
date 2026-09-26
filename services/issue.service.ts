@@ -1,27 +1,25 @@
 import "server-only";
 
-import { Types } from "mongoose";
+import { Types, type PipelineStage } from "mongoose";
 
 import { requireWorkspaceMember } from "@/lib/auth/workspace";
 import { connectToDatabase } from "@/lib/db/connect";
 import { ForbiddenError, NotFoundError, ValidationError, zodErrorToDetails } from "@/lib/errors";
 import { logger } from "@/lib/logger";
+import {
+  ISSUE_CREATION_SOURCE,
+  ISSUE_PRIORITY_WEIGHTS,
+  NO_PROJECT_FILTER,
+  type IssueSort,
+} from "@/lib/constants/issues";
+import { literalRegex, normalizeSearchTerm } from "@/lib/utils/search";
 import { Issue, Project, User, type IssueDocument } from "@/models";
 import { createActivity } from "@/services/activity.service";
 import { canCreateIssue, canViewIssues } from "@/services/permission.service";
 import type { IssueCategory, IssuePriority, IssueSource, IssueStatus } from "@/types/domain";
-import { ISSUE_CREATION_SOURCE } from "@/lib/constants/issues";
-import { createIssueSchema } from "@/validators/issue";
+import { createIssueSchema, issueListQuerySchema, type IssueListQuery } from "@/validators/issue";
 
 const log = logger.child("issue:service");
-
-/**
- * How many problems the first-version list returns.
- *
- * Task 11 renders a plain recency list; Task 12 replaces this cap with real
- * search, filtering and pagination.
- */
-export const ISSUE_LIST_LIMIT = 100;
 
 export interface IssueSummary {
   id: string;
@@ -49,6 +47,36 @@ export interface IssueDetail extends IssueSummary {
   creatorEmail: string | null;
 }
 
+/** The subset of a list query that narrows the result set. */
+export interface IssueFilters {
+  search?: string;
+  status?: IssueStatus;
+  priority?: IssuePriority;
+  category?: IssueCategory;
+  /** An ObjectId, or `"none"` for problems with no project. */
+  projectId?: string;
+}
+
+export interface IssuePagination {
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+  hasNextPage: boolean;
+  hasPreviousPage: boolean;
+}
+
+/** The shape the list API returns. */
+export interface IssueListResponse {
+  issues: IssueSummary[];
+  pagination: IssuePagination;
+}
+
+/** As above, plus the normalized query so the caller can echo it to the UI. */
+export interface IssueListResult extends IssueListResponse {
+  query: IssueListQuery;
+}
+
 /** Trusted input: ids come from the session and the URL, never from the body. */
 export interface IssueCreateInput {
   workspaceId: string;
@@ -63,14 +91,14 @@ export interface IssueCreateInput {
 type StoredIssue = IssueDocument & { _id: Types.ObjectId };
 
 /**
- * Problem creation service (Task 11).
+ * Problem service (Task 11 creation, Task 12 list).
  *
- * A problem is always created *inside a workspace the caller belongs to*, and
- * may optionally be attached to a project of that same workspace. Both checks run
- * server-side before anything is written; the request body contributes nothing
- * but the problem's own content.
+ * A problem is always created *inside a workspace the caller belongs to*, and may
+ * optionally be attached to a project of that same workspace. Every list query is
+ * scoped to that workspace before any user-supplied filter is applied, so a
+ * caller can only ever narrow down problems they are already allowed to see.
  *
- * Deliberately out of scope here: AI classification, diagnosis, planning, task
+ * Deliberately out of scope: AI classification, diagnosis, planning, task
  * generation, file inputs, evidence, verification, reports and notifications.
  */
 
@@ -328,29 +356,196 @@ export async function getIssueById(
   return toIssueDetail(issue, lookups);
 }
 
+/* -------------------------------------------------------------------------- */
+/* List query building (Task 12)                                               */
+/* -------------------------------------------------------------------------- */
+
 /**
- * List the workspace's problems, newest first.
+ * Sort directions for the sorts MongoDB can serve directly from an index.
  *
- * Basic recency listing only — search, filters, sorting and pagination arrive
- * with Task 12.
+ * `_id` is the tie-breaker in every case: without it, two problems created in the
+ * same millisecond can swap places between pages and a row can be shown twice or
+ * skipped.
+ */
+const INDEXED_SORTS: Record<
+  Exclude<IssueSort, "priority_desc" | "priority_asc">,
+  Record<string, 1 | -1>
+> = {
+  created_desc: { createdAt: -1, _id: -1 },
+  created_asc: { createdAt: 1, _id: 1 },
+  updated_desc: { updatedAt: -1, _id: -1 },
+  title_asc: { title: 1, _id: 1 },
+  title_desc: { title: -1, _id: -1 },
+};
+
+export interface ResolvedIssueSort {
+  /** Present when MongoDB can sort this order from stored fields. */
+  sort: Record<string, 1 | -1> | null;
+  /** Present for priority sorts, which need a computed rank. */
+  priorityDirection: 1 | -1 | null;
+}
+
+/**
+ * Translate a sort key into something the database can execute.
+ *
+ * Priority is stored as text (`low`…`critical`), which sorts alphabetically —
+ * `critical, high, low, medium`. Ranking it with the product weights instead
+ * happens in the query (see {@link issuePrioritySortStages}), never by fetching
+ * everything and reordering it in the browser.
+ */
+export function buildIssueSort(sort: IssueSort): ResolvedIssueSort {
+  if (sort === "priority_desc") return { sort: null, priorityDirection: -1 };
+  if (sort === "priority_asc") return { sort: null, priorityDirection: 1 };
+  return { sort: { ...INDEXED_SORTS[sort] }, priorityDirection: null };
+}
+
+/**
+ * Aggregation stages that rank priority by weight and then order by it.
+ *
+ * `critical = 4 … low = 1`, so `priority_desc` yields Critical, High, Medium,
+ * Low. Unknown values (they cannot exist today) fall back to the `medium` rank
+ * rather than disappearing from the list.
+ */
+export function issuePrioritySortStages(direction: 1 | -1): PipelineStage[] {
+  const branches = (Object.keys(ISSUE_PRIORITY_WEIGHTS) as IssuePriority[]).map((priority) => ({
+    case: { $eq: ["$priority", priority] },
+    then: ISSUE_PRIORITY_WEIGHTS[priority],
+  }));
+
+  return [
+    {
+      $addFields: {
+        priorityRank: {
+          $switch: { branches, default: ISSUE_PRIORITY_WEIGHTS.medium },
+        },
+      },
+    },
+    { $sort: { priorityRank: direction, createdAt: -1, _id: -1 } },
+  ];
+}
+
+/**
+ * Build the MongoDB filter for a list request.
+ *
+ * `workspaceId` is written first and cannot be overridden by anything the caller
+ * supplies — every later key only narrows the set further. The search term is
+ * escaped into a literal, case-insensitive pattern, so regex metacharacters in a
+ * search box stay characters.
+ */
+export function buildIssueListFilter(
+  workspaceId: string,
+  filters: IssueFilters = {},
+): Record<string, unknown> {
+  const filter: Record<string, unknown> = {
+    workspaceId: new Types.ObjectId(workspaceId),
+  };
+
+  const term = normalizeSearchTerm(filters.search);
+  if (term) {
+    filter.$or = [{ title: literalRegex(term) }, { description: literalRegex(term) }];
+  }
+
+  if (filters.status) filter.status = filters.status;
+  if (filters.priority) filter.priority = filters.priority;
+  if (filters.category) filter.category = filters.category;
+
+  if (filters.projectId === NO_PROJECT_FILTER) {
+    filter.projectId = null;
+  } else if (filters.projectId && Types.ObjectId.isValid(filters.projectId)) {
+    filter.projectId = new Types.ObjectId(filters.projectId);
+  }
+
+  return filter;
+}
+
+/** Pagination metadata, shaped exactly like the API contract. */
+export function buildIssuePagination(page: number, limit: number, total: number): IssuePagination {
+  const totalPages = limit > 0 ? Math.max(1, Math.ceil(total / limit)) : 1;
+
+  return {
+    page,
+    limit,
+    total,
+    totalPages,
+    hasNextPage: page < totalPages,
+    hasPreviousPage: page > 1,
+  };
+}
+
+/** Run the page query: an indexed `find`, or an aggregation for priority order. */
+async function queryIssuePage(options: {
+  filter: Record<string, unknown>;
+  sort: ResolvedIssueSort;
+  skip: number;
+  limit: number;
+}): Promise<StoredIssue[]> {
+  const { filter, sort, skip, limit } = options;
+
+  if (sort.priorityDirection !== null) {
+    return Issue.aggregate<StoredIssue>([
+      { $match: filter },
+      ...issuePrioritySortStages(sort.priorityDirection),
+      { $skip: skip },
+      { $limit: limit },
+    ]);
+  }
+
+  return Issue.find(filter)
+    .sort(sort.sort ?? { createdAt: -1, _id: -1 })
+    .skip(skip)
+    .limit(limit)
+    .lean<StoredIssue[]>();
+}
+
+/**
+ * List the workspace's problems with search, filters, sorting and pagination.
+ *
+ * Filtering, sorting and paging all happen in MongoDB, so a workspace with tens of
+ * thousands of problems costs the same as one with twenty: an indexed count plus
+ * one page of documents. Nothing is fetched to be thrown away.
  */
 export async function getWorkspaceIssues(
   userId: string,
   workspaceId: string,
-): Promise<IssueSummary[]> {
+  input?: unknown,
+): Promise<IssueListResult> {
   const { membership } = await requireWorkspaceMember(userId, workspaceId);
 
   if (!canViewIssues(membership.role)) {
     throw new ForbiddenError("You do not have permission to view problems in this workspace.");
   }
 
+  const parsed = issueListQuerySchema.safeParse(input ?? {});
+  if (!parsed.success) {
+    throw new ValidationError(
+      "Please check the list options and try again.",
+      zodErrorToDetails(parsed.error),
+    );
+  }
+  const query = parsed.data;
+
   await connectToDatabase();
 
-  const issues = await Issue.find({ workspaceId: new Types.ObjectId(workspaceId) })
-    .sort({ createdAt: -1 })
-    .limit(ISSUE_LIST_LIMIT)
-    .lean<StoredIssue[]>();
+  // A project filter must belong to this workspace: a foreign id is refused
+  // rather than silently returning an empty list.
+  if (query.projectId && query.projectId !== NO_PROJECT_FILTER) {
+    await resolveWorkspaceProject(query.projectId, workspaceId);
+  }
 
-  const lookups = await loadIssueLookups(issues);
-  return issues.map((issue) => toIssueSummary(issue, lookups));
+  const filter = buildIssueListFilter(workspaceId, query);
+  const sort = buildIssueSort(query.sort);
+  const skip = (query.page - 1) * query.limit;
+
+  const [total, stored] = await Promise.all([
+    Issue.countDocuments(filter),
+    queryIssuePage({ filter, sort, skip, limit: query.limit }),
+  ]);
+
+  const lookups = await loadIssueLookups(stored);
+
+  return {
+    issues: stored.map((issue) => toIssueSummary(issue, lookups)),
+    pagination: buildIssuePagination(query.page, query.limit, total),
+    query,
+  };
 }

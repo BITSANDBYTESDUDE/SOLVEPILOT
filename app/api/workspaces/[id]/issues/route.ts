@@ -13,16 +13,35 @@ interface RouteContext {
 /**
  * `GET /api/workspaces/[workspaceId]/issues`
  *
- * Lists the problems belonging to the workspace, newest first. Every workspace
- * member may read them; search, filtering and pagination arrive with Task 12.
+ * Searchable, filterable, sortable and paginated list of the workspace's
+ * problems. Every workspace member may read them.
+ *
+ * Query parameters (all optional):
+ *   `search`    — case-insensitive match on title or description (≤100 chars)
+ *   `status`    — new | analyzing | planned | in_progress | verification |
+ *                 resolved | closed
+ *   `priority`  — low | medium | high | critical
+ *   `category`  — technical | ui | business | productivity | academic | other
+ *   `projectId` — an ObjectId from this workspace, or `none` for no project
+ *   `sort`      — created_desc (default) | created_asc | updated_desc |
+ *                 priority_desc | priority_asc | title_asc | title_desc
+ *   `page`      — 1-based, default 1
+ *   `limit`     — default 20, maximum 100
+ *
+ * Filtering, sorting and paging are executed by MongoDB; the endpoint only ever
+ * returns one page.
  */
-export async function GET(_request: NextRequest, context: RouteContext) {
+export async function GET(request: NextRequest, context: RouteContext) {
   try {
     const { user } = await requireApiUser();
     const { id: workspaceId } = await context.params;
 
-    const issues = await getWorkspaceIssues(user.id, workspaceId);
-    return jsonOk({ issues });
+    const { searchParams } = new URL(request.url);
+    const query = Object.fromEntries(searchParams.entries());
+
+    const { issues, pagination } = await getWorkspaceIssues(user.id, workspaceId, query);
+
+    return jsonOk({ issues, pagination });
   } catch (error) {
     return jsonError(error, { route: "GET /api/workspaces/[id]/issues" });
   }

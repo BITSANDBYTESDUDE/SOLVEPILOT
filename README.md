@@ -200,23 +200,23 @@ npm run db:indexes            # syncIndexes: also drops indexes removed from the
 
 Collections and their indexes are declared in `models/` (one file per collection):
 
-| Collection       | Purpose                                           | Key indexes                                                                                                                                                                                 |
-| ---------------- | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `users`          | accounts, role, preferences                       | `email` (unique), `createdAt`                                                                                                                                                               |
-| `workspaces`     | tenancy root + members/roles                      | `slug` (unique), `ownerId`, `members.userId`                                                                                                                                                |
-| `projects`       | issue grouping per workspace                      | `workspaceId+status`, `workspaceId+createdAt`, text `name/description`                                                                                                                      |
-| `issues`         | the core problem record                           | `workspaceId+status+createdAt`, `workspaceId+priority`, `workspaceId+category`, `workspaceId+assignedTo`, `projectId+createdAt`, `status+createdAt`, `resolvedAt`, text `title/description` |
-| `issue_inputs`   | text/image/PDF/audio inputs                       | `issueId+createdAt`, `processingStatus`                                                                                                                                                     |
-| `diagnoses`      | summary, causes, observations, risks, assumptions | `issueId+createdAt`                                                                                                                                                                         |
-| `solution_plans` | objective, recommendations, ordered steps         | `issueId+createdAt`                                                                                                                                                                         |
-| `tasks`          | trackable work items                              | `issueId+order`, `status`, `assignedTo+status`, text `title/description`                                                                                                                    |
-| `evidence`       | before/after/supporting proof                     | `issueId+type+createdAt`, `uploadedBy`                                                                                                                                                      |
-| `verifications`  | checks with pass/fail/unknown results             | `issueId+createdAt`, `status+createdAt`                                                                                                                                                     |
-| `reports`        | PDF reports and share tokens                      | `issueId+createdAt`, `shareToken` (unique, partial)                                                                                                                                         |
-| `ai_runs`        | AI usage, tokens and latency                      | `issueId+createdAt`, `type+createdAt`, `status+createdAt`                                                                                                                                   |
-| `activity_logs`  | audit trail                                       | `workspaceId+createdAt`, `issueId+createdAt`, `actorId+createdAt`                                                                                                                           |
-| `notifications`  | per-user read/unread state                        | `userId+readAt+createdAt`, `userId+createdAt`                                                                                                                                               |
-| `sessions`       | revocable sign-in sessions (hashed token)         | `sessionHash` (unique), `userId+createdAt`, `expiresAt`                                                                                                                                     |
+| Collection       | Purpose                                           | Key indexes                                                                                                                                                                                         |
+| ---------------- | ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `users`          | accounts, role, preferences                       | `email` (unique), `createdAt`                                                                                                                                                                       |
+| `workspaces`     | tenancy root + members/roles                      | `slug` (unique), `ownerId`, `members.userId`                                                                                                                                                        |
+| `projects`       | issue grouping per workspace                      | `workspaceId+status`, `workspaceId+createdAt`, text `name/description`                                                                                                                              |
+| `issues`         | the core problem record                           | `workspaceId+createdAt`, `workspaceId+status+createdAt`, `workspaceId+priority+createdAt`, `workspaceId+category+createdAt`, `projectId+createdAt`, `createdBy+createdAt`, text `title/description` |
+| `issue_inputs`   | text/image/PDF/audio inputs                       | `issueId+createdAt`, `processingStatus`                                                                                                                                                             |
+| `diagnoses`      | summary, causes, observations, risks, assumptions | `issueId+createdAt`                                                                                                                                                                                 |
+| `solution_plans` | objective, recommendations, ordered steps         | `issueId+createdAt`                                                                                                                                                                                 |
+| `tasks`          | trackable work items                              | `issueId+order`, `status`, `assignedTo+status`, text `title/description`                                                                                                                            |
+| `evidence`       | before/after/supporting proof                     | `issueId+type+createdAt`, `uploadedBy`                                                                                                                                                              |
+| `verifications`  | checks with pass/fail/unknown results             | `issueId+createdAt`, `status+createdAt`                                                                                                                                                             |
+| `reports`        | PDF reports and share tokens                      | `issueId+createdAt`, `shareToken` (unique, partial)                                                                                                                                                 |
+| `ai_runs`        | AI usage, tokens and latency                      | `issueId+createdAt`, `type+createdAt`, `status+createdAt`                                                                                                                                           |
+| `activity_logs`  | audit trail                                       | `workspaceId+createdAt`, `issueId+createdAt`, `actorId+createdAt`                                                                                                                                   |
+| `notifications`  | per-user read/unread state                        | `userId+readAt+createdAt`, `userId+createdAt`                                                                                                                                                       |
+| `sessions`       | revocable sign-in sessions (hashed token)         | `sessionHash` (unique), `userId+createdAt`, `expiresAt`                                                                                                                                             |
 
 Notes:
 
@@ -321,24 +321,26 @@ verification flow and is deliberately not part of this task.
 A workspace is the tenancy root: projects, problems and everything under them belong to one.
 A user only ever reaches workspaces they are a member of.
 
-| Endpoint                                    | Method | Result                                                        |
-| ------------------------------------------- | ------ | ------------------------------------------------------------- |
-| `/api/workspaces`                           | GET    | `200` with the caller's workspaces and their role in each     |
-| `/api/workspaces`                           | POST   | `201`; the creator becomes its `owner`                        |
-| `/api/workspaces/[id]`                      | GET    | `200` for members, `404` for everyone else                    |
-| `/api/workspaces/[id]`                      | PATCH  | Rename or change slug; requires `admin` or above              |
-| `/api/workspaces/[id]/members`              | GET    | `200` safe member list for workspace members                  |
-| `/api/workspaces/[id]/members`              | POST   | `201` adds member by email; requires `admin` or `owner`       |
-| `/api/workspaces/[id]/members/[userId]`     | PATCH  | `200` updates member role; owner/admin permission rules       |
-| `/api/workspaces/[id]/members/[userId]`     | DELETE | `200` removes member; owner/admin rules, owner protected      |
-| `/api/dashboard`                            | GET    | `200` real workspace statistics for caller's active workspace |
-| `/api/workspaces/[id]/dashboard`            | GET    | `200` real workspace statistics scoped to target workspace    |
-| `/api/workspaces/[id]/projects`             | GET    | `200` lists projects with search, status filter and sort      |
-| `/api/workspaces/[id]/projects`             | POST   | `201` creates project; requires `admin` or `owner`            |
-| `/api/workspaces/[id]/projects/[projectId]` | GET    | `200` project detail; strictly scoped to workspace            |
-| `/api/workspaces/[id]/projects/[projectId]` | PATCH  | `200` updates project or archives; `admin` or `owner`         |
-| `/api/workspaces/[id]/projects/[projectId]` | DELETE | `200` permanently deletes project; `admin` or `owner`         |
-| `/api/workspaces/active`                    | POST   | Selects the active workspace, after verifying membership      |
+| Endpoint                                    | Method | Result                                                         |
+| ------------------------------------------- | ------ | -------------------------------------------------------------- |
+| `/api/workspaces`                           | GET    | `200` with the caller's workspaces and their role in each      |
+| `/api/workspaces`                           | POST   | `201`; the creator becomes its `owner`                         |
+| `/api/workspaces/[id]`                      | GET    | `200` for members, `404` for everyone else                     |
+| `/api/workspaces/[id]`                      | PATCH  | Rename or change slug; requires `admin` or above               |
+| `/api/workspaces/[id]/members`              | GET    | `200` safe member list for workspace members                   |
+| `/api/workspaces/[id]/members`              | POST   | `201` adds member by email; requires `admin` or `owner`        |
+| `/api/workspaces/[id]/members/[userId]`     | PATCH  | `200` updates member role; owner/admin permission rules        |
+| `/api/workspaces/[id]/members/[userId]`     | DELETE | `200` removes member; owner/admin rules, owner protected       |
+| `/api/dashboard`                            | GET    | `200` real workspace statistics for caller's active workspace  |
+| `/api/workspaces/[id]/dashboard`            | GET    | `200` real workspace statistics scoped to target workspace     |
+| `/api/workspaces/[id]/projects`             | GET    | `200` lists projects with search, status filter and sort       |
+| `/api/workspaces/[id]/projects`             | POST   | `201` creates project; requires `admin` or `owner`             |
+| `/api/workspaces/[id]/projects/[projectId]` | GET    | `200` project detail; strictly scoped to workspace             |
+| `/api/workspaces/[id]/projects/[projectId]` | PATCH  | `200` updates project or archives; `admin` or `owner`          |
+| `/api/workspaces/[id]/projects/[projectId]` | DELETE | `200` permanently deletes project; `admin` or `owner`          |
+| `/api/workspaces/[id]/issues`               | GET    | `200` lists problems with search, filters, sort and pagination |
+| `/api/workspaces/[id]/issues`               | POST   | `201` creates a problem in the workspace                       |
+| `/api/workspaces/active`                    | POST   | Selects the active workspace, after verifying membership       |
 
 **Tenancy is enforced in one place** (`lib/auth/workspace.ts`). Every workspace read goes
 through `requireWorkspaceMember()`, so no route can forget the check.
@@ -420,11 +422,15 @@ npm run workspace:verify # 78 checks: slug rules, reserved slugs, roles, members
 npm run project:verify  # 47 checks: project rules, colours, owner/admin/member matrix
 npm run dashboard:verify # 16 checks: metric aggregation and workspace isolation
 npm run activity:verify # 34 checks: action types, metadata sanitization, indexes
-npm run issue:verify    # 80 checks: problem validation, schema, indexes, tenancy,
-                        #   server-controlled fields, activity metadata. With
-                        #   MONGODB_URI set it also runs the live service checks
+npm run issue:verify    # 127 checks: problem validation, schema, indexes, tenancy,
+                        #   server-controlled fields, activity metadata, search escaping,
+                        #   list query building, sorting, pagination math and URL state.
+                        #   With MONGODB_URI set it also runs the live service checks
                         #   (creation per role, cross-workspace and cross-project
-                        #   rejection, issue.created activity, retrieval isolation).
+                        #   rejection, issue.created activity, retrieval isolation, and
+                        #   the list layer against five seeded problems: pagination,
+                        #   search, every filter, every sort, a combined query and
+                        #   workspace isolation).
 ```
 
 They share one harness (`scripts/lib/verify-harness.ts`) and exit non-zero on any
@@ -488,7 +494,7 @@ SolvePilot is built incrementally, and the application stays runnable after ever
 | 09  | Dashboard statistics                                           | ✅ Done    |
 | 10  | Activity logging                                               | ✅ Done    |
 | 11  | Issue/problem creation                                         | ✅ Done    |
-| 12  | Issue list with search, filter, sort, pagination               | ⏳ Planned |
+| 12  | Issue list with search, filter, sort, pagination               | ✅ Done    |
 | 13  | Issue detail page                                              | ⏳ Planned |
 | 14  | Issue status workflow                                          | ⏳ Planned |
 | 15  | Secure file uploads                                            | ⏳ Planned |
@@ -527,13 +533,21 @@ sign-out with revocable server-side sessions (`npm run auth:verify` → 39/39 ch
 checks pass), multi-workspace tenancy with a switcher (`npm run workspace:verify` → 78/78
 checks pass), and projects (`npm run project:verify` → 47/47 checks pass).
 
-Task 11 adds the first step of the problem-solving workflow: `/dashboard/issues` (list),
-`/dashboard/issues/new` (creation form) and `/dashboard/issues/[issueId]` (detail, with a
-visual AI Analysis placeholder — no model is called yet), backed by
-`POST|GET /api/workspaces/[id]/issues` and `services/issue.service.ts`
-(`npm run issue:verify` → 80/80 static checks pass, plus the live service checks when
-`MONGODB_URI` is set). The whole `/dashboard` section is guarded by a single layout, so no
-page under it can forget its own check. No screenshots are included because the product UI
+Task 11 adds the first step of the problem-solving workflow: `/dashboard/issues/new`
+(creation form) and `/dashboard/issues/[issueId]` (detail, with a visual AI Analysis
+placeholder — no model is called yet), backed by `POST|GET /api/workspaces/[id]/issues`
+and `services/issue.service.ts`. The whole `/dashboard` section is guarded by a single
+layout, so no page under it can forget its own check.
+
+Task 12 turns `/dashboard/issues` into the management view for that data: debounced search
+over title and description, status / priority / category / project filters, seven sort
+orders and cursor-free page pagination — all executed by MongoDB against the
+`workspaceId`-leading indexes above, never in the browser. The list state round-trips
+through the URL (`?search=navbar&status=new&priority=high&page=2`), so a filtered view is
+shareable and survives a refresh. Priority ordering uses explicit weights
+(`critical 4 … low 1`) in an aggregation `$switch`, never an alphabetical sort of the
+enum. `npm run issue:verify` → 127/127 static checks pass, plus the live service and list
+checks when `MONGODB_URI` is set. No screenshots are included because the product UI
 beyond these screens does not exist yet.
 
 ---

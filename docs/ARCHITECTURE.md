@@ -132,9 +132,18 @@ Schema conventions (`models/schema-options.ts`):
 - Indexes are declared per model next to the fields they serve. Where a compound index
   already covers a single-field access path (index prefix rule), no redundant single-field
   index is added.
+- List queries drive the index set, not the schema: a tenant-scoped list index leads with
+  `workspaceId`, carries the filtered field, and ends with `createdAt` so a filter _and_
+  its default recency sort are served by one index instead of matching then sorting in
+  memory. Filters that a prefix already covers get no index of their own (an `issues`
+  project filter is served by `projectId + createdAt` because a project belongs to exactly
+  one workspace).
+- Derived orderings are computed in the query, never stored: problem priority sorts through
+  an aggregation `$switch` over explicit weights (`critical 4 … low 1`) rather than the
+  enum's alphabetical order.
 
 Operational tooling: `scripts/db-verify.mts` (`npm run db:verify`) compiles every model,
-runs 70 schema assertions without a database, and — when `MONGODB_URI` is present —
+runs 79 schema assertions without a database, and — when `MONGODB_URI` is present —
 connects, creates/syncs indexes, reports them and pings the server.
 
 ---
@@ -154,7 +163,9 @@ Status codes: `400` validation, `401` unauthenticated, `403` unauthorized,
 `422` unprocessable (e.g. failed AI output validation), `429` rate limited,
 `500` internal, `502` upstream (AI/storage) failure.
 
-List endpoints return `{ items, meta: { page, pageSize, total, totalPages, hasNextPage, hasPreviousPage } }`.
+List endpoints return the collection under its own key plus a `pagination` object —
+`{ activities, pagination }`, `{ issues, pagination }` — where pagination is always
+`{ page, limit, total, totalPages, hasNextPage, hasPreviousPage }`.
 
 ---
 
