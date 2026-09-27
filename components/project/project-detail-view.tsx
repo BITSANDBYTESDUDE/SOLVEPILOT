@@ -7,6 +7,7 @@ import {
   Calendar,
   Clock,
   Pencil,
+  Plus,
   Sparkles,
   Trash2,
   User,
@@ -171,12 +172,13 @@ export function ProjectDetailView({
         </CardContent>
       </Card>
 
-      {/* Problems Placeholder Card (Scope Rule: Do NOT implement Issues) */}
+      {/* Problems filed against this project (Task 11).
+          The per-project list with filters arrives with issue search (Task 12). */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg">Problems & Issues</CardTitle>
+          <CardTitle className="text-lg">Problems</CardTitle>
           <CardDescription>
-            Problems, investigations, and AI-guided resolution workflows linked to this project.
+            Problems filed against this project, and the AI-guided workflows that follow them.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -184,13 +186,21 @@ export function ProjectDetailView({
             <div className="flex size-12 items-center justify-center rounded-full bg-primary/10 text-primary">
               <Sparkles className="size-6" aria-hidden="true" />
             </div>
-            <h3 className="mt-4 text-base font-semibold">
-              No problems have been added to this project yet
-            </h3>
+            <h3 className="mt-4 text-base font-semibold">Work on a problem in this project</h3>
             <p className="mt-1 max-w-sm text-sm text-muted-foreground">
-              Problems and AI-powered workflows will appear here once issue management is activated
-              in the next phase.
+              New problems you create here are filed under {currentProject.name} automatically.
             </p>
+            <div className="mt-5 flex flex-wrap items-center justify-center gap-2">
+              <Button asChild>
+                <Link href={`/dashboard/issues/new?projectId=${currentProject.id}`}>
+                  <Plus className="size-4" aria-hidden="true" />
+                  Create Problem
+                </Link>
+              </Button>
+              <Button variant="outline" asChild>
+                <Link href="/dashboard/issues">View all problems</Link>
+              </Button>
+            </div>
           </div>
         </CardContent>
       </Card>

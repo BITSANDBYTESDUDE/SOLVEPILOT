@@ -574,9 +574,11 @@ section("Index coverage", [
   {
     description: "Issue workspace/status/priority/category indexes",
     test: () =>
-      ["workspaceId+status+createdAt", "workspaceId+priority", "workspaceId+category"].every(
-        (name) => indexNamesOf(models.Issue).includes(name),
-      ),
+      [
+        "workspaceId+status+createdAt",
+        "workspaceId+priority+createdAt",
+        "workspaceId+category+createdAt",
+      ].every((name) => indexNamesOf(models.Issue).includes(name)),
   },
   {
     description: "Issue project index",

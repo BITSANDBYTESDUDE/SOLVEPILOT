@@ -75,7 +75,7 @@ export function ActivityTimeline({
   const router = useRouter();
   const [data, setData] = React.useState<PaginatedActivities>(initialData);
   const [filterCategory, setFilterCategory] = React.useState<
-    "all" | "project" | "member" | "workspace"
+    "all" | "issue" | "project" | "member" | "workspace"
   >("all");
   const [page, setPage] = React.useState(1);
   const [loading, setLoading] = React.useState(false);
@@ -173,6 +173,7 @@ export function ActivityTimeline({
           {(
             [
               { id: "all", label: "All Activities" },
+              { id: "issue", label: "Problems" },
               { id: "project", label: "Projects" },
               { id: "member", label: "Members" },
               { id: "workspace", label: "Workspace" },
@@ -203,8 +204,8 @@ export function ActivityTimeline({
             </div>
             <CardTitle className="mt-3 text-base font-semibold">No activity yet</CardTitle>
             <CardDescription className="text-sm">
-              Important workspace actions like creating projects and updating members will appear
-              here.
+              Important workspace actions like creating problems and projects, and updating members,
+              will appear here.
             </CardDescription>
           </CardHeader>
         </Card>

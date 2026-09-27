@@ -172,6 +172,20 @@ export const canEditProject = canManageProjects;
 export const canArchiveProject = canManageProjects;
 export const canDeleteProject = canManageProjects;
 
+// Problem (issue) permissions (Task 11)
+//
+// Creating a problem is the entry point of the whole workflow, so every member
+// of the workspace may do it — owner, admin and member alike. Role-gating starts
+// later, with destructive and administrative issue operations.
+
+export function canViewIssues(target: RoleOrMembership): boolean {
+  return isWorkspaceMember(target);
+}
+
+export function canCreateIssue(target: RoleOrMembership): boolean {
+  return isWorkspaceMember(target);
+}
+
 // Convenient aliases
 export const canAddMember = canAddWorkspaceMember;
 export const canRemoveMember = canRemoveWorkspaceMember;
