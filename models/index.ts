@@ -5,6 +5,10 @@
  * used by services, scripts and the index-sync tooling.
  */
 export { ActivityLog, type ActivityLogDocument } from "@/models/activity-log.model";
+export {
+  AttachmentContent,
+  type AttachmentContentDocument,
+} from "@/models/attachment-content.model";
 export { AiRun, type AiRunDocument } from "@/models/ai-run.model";
 export {
   Diagnosis,
@@ -13,6 +17,7 @@ export {
 } from "@/models/diagnosis.model";
 export { Evidence, type EvidenceDocument } from "@/models/evidence.model";
 export { Issue, type IssueDocument } from "@/models/issue.model";
+export { IssueAttachment, type IssueAttachmentDocument } from "@/models/issue-attachment.model";
 export { IssueInput, type IssueInputDocument } from "@/models/issue-input.model";
 export { Notification, type NotificationDocument } from "@/models/notification.model";
 export { Project, type ProjectDocument } from "@/models/project.model";

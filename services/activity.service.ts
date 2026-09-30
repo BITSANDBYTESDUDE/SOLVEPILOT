@@ -236,3 +236,50 @@ export async function getRecentWorkspaceActivities(
   const result = await getWorkspaceActivities(userId, workspaceId, { page: 1, limit });
   return result.activities;
 }
+
+/** Issue-only activity history, always scoped to the caller's workspace and Issue. */
+export async function getIssueActivities(
+  userId: string,
+  workspaceId: string,
+  issueId: string,
+): Promise<SafeActivityItem[]> {
+  await requireWorkspaceMember(userId, workspaceId);
+  if (!Types.ObjectId.isValid(issueId)) return [];
+  await connectToDatabase();
+
+  const activities = await ActivityLog.find({
+    workspaceId: new Types.ObjectId(workspaceId),
+    issueId: new Types.ObjectId(issueId),
+  })
+    .sort({ createdAt: -1 })
+    .limit(50)
+    .lean<Array<ActivityLogDocument & { _id: Types.ObjectId }>>();
+
+  const actorIds = [...new Set(activities.map((item) => String(item.actorId)))];
+  const actors = actorIds.length
+    ? await User.find({ _id: { $in: actorIds } })
+        .select("_id name email avatarUrl")
+        .lean<
+          Array<{ _id: Types.ObjectId; name: string; email: string; avatarUrl?: string | null }>
+        >()
+    : [];
+  const actorMap = new Map(actors.map((actor) => [String(actor._id), actor]));
+
+  return activities.map((item) => {
+    const actor = actorMap.get(String(item.actorId));
+    return {
+      id: String(item._id),
+      workspaceId: String(item.workspaceId),
+      issueId: item.issueId ? String(item.issueId) : null,
+      actor: {
+        id: String(item.actorId),
+        name: actor?.name ?? "Former Member",
+        email: actor?.email,
+        avatarUrl: actor?.avatarUrl ?? null,
+      },
+      action: item.action,
+      metadata: (item.metadata as Record<string, unknown>) ?? {},
+      createdAt: item.createdAt,
+    };
+  });
+}

@@ -3,6 +3,7 @@ import {
   Building2,
   CircleAlert,
   FolderPlus,
+  Paperclip,
   Pencil,
   Settings,
   Shield,
@@ -13,6 +14,8 @@ import {
 import Link from "next/link";
 import * as React from "react";
 
+import { issueStatusLabel } from "@/lib/constants/issues";
+import { isIssueStatus } from "@/lib/issue-status";
 import type { SafeActivityItem } from "@/services/activity.service";
 import type { ActivityAction } from "@/types/domain";
 
@@ -20,6 +23,13 @@ export function getActivityIcon(action: ActivityAction) {
   switch (action) {
     case "issue.created":
       return <CircleAlert className="size-4 text-primary" aria-hidden="true" />;
+    case "issue.updated":
+    case "issue.status_changed":
+      return <Pencil className="size-4 text-blue-500" aria-hidden="true" />;
+    case "issue.attachment_added":
+      return <Paperclip className="size-4 text-primary" aria-hidden="true" />;
+    case "issue.attachment_deleted":
+      return <Trash2 className="size-4 text-destructive" aria-hidden="true" />;
     case "project.created":
       return <FolderPlus className="size-4 text-primary" aria-hidden="true" />;
     case "project.updated":
@@ -51,6 +61,88 @@ export function ActivityMessage({ activity }: { activity: SafeActivityItem }) {
   const actorName = actor.name || "A team member";
 
   switch (action) {
+    case "issue.attachment_added":
+    case "issue.attachment_deleted": {
+      const fileName = typeof metadata.fileName === "string" ? metadata.fileName : "a file";
+      const verb = action === "issue.attachment_added" ? "attached" : "removed";
+      return (
+        <span>
+          <strong className="font-semibold text-foreground">{actorName}</strong> {verb}{" "}
+          <strong className="font-medium text-foreground">&ldquo;{fileName}&rdquo;</strong>.
+        </span>
+      );
+    }
+
+    case "issue.status_changed": {
+      const from = isIssueStatus(metadata.from) ? metadata.from : null;
+      const to = isIssueStatus(metadata.to) ? metadata.to : null;
+      const title = typeof metadata.title === "string" ? metadata.title : "this problem";
+      if (!from || !to) {
+        return (
+          <span>
+            <strong className="font-semibold text-foreground">{actorName}</strong> updated the
+            Problem status
+          </span>
+        );
+      }
+      const titleNode = (
+        <strong className="font-semibold text-foreground">&ldquo;{title}&rdquo;</strong>
+      );
+      return (
+        <span>
+          <strong className="font-semibold text-foreground">{actorName}</strong>{" "}
+          {from === "resolved" && to === "in_progress" ? "reopened " : "moved "}
+          {titleNode} from {issueStatusLabel(from)} to {issueStatusLabel(to)}.
+        </span>
+      );
+    }
+
+    case "issue.updated": {
+      const changes = Array.isArray(metadata.changes)
+        ? metadata.changes.filter(
+            (change): change is { field: string; from?: string; to?: string } =>
+              typeof change === "object" &&
+              change !== null &&
+              "field" in change &&
+              typeof change.field === "string",
+          )
+        : [];
+      const changedFields = Array.isArray(metadata.changedFields)
+        ? metadata.changedFields.filter((field): field is string => typeof field === "string")
+        : [];
+      const labels: Record<string, string> = {
+        title: "the title",
+        description: "the description",
+        category: "the category",
+        priority: "priority",
+        projectId: "the project",
+      };
+      const primary = changes[0];
+      const label = primary
+        ? (labels[primary.field] ?? "problem details")
+        : (labels[changedFields[0] ?? ""] ?? "problem details");
+      const format = (value: string | undefined) => {
+        if (!value) return "No Project";
+        return value.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+      };
+      return (
+        <span>
+          <strong className="font-semibold text-foreground">{actorName}</strong> updated {label}
+          {primary?.from !== undefined || primary?.to !== undefined ? (
+            <span className="mt-1 block text-xs text-muted-foreground">
+              {format(primary.from)} → {format(primary.to)}
+            </span>
+          ) : null}
+          {changedFields.length > 1 ? (
+            <span className="text-xs text-muted-foreground">
+              {" "}
+              and {changedFields.length - 1} other field{changedFields.length > 2 ? "s" : ""}
+            </span>
+          ) : null}
+        </span>
+      );
+    }
+
     case "issue.created": {
       const issueTitle = (metadata.title as string) || "a problem";
       const issueId = activity.issueId ?? (metadata.issueId as string | undefined);

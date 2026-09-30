@@ -61,11 +61,24 @@ import {
   getWorkspaceIssues,
   issueCreatedMetadata,
   issuePrioritySortStages,
+  updateIssue,
+  changeIssueStatus,
   type IssueFilters,
 } from "@/services/issue.service";
-import { canCreateIssue, canViewIssues } from "@/services/permission.service";
-import { ACTIVITY_ACTION_TYPES, ACTIVITY_ACTIONS, ISSUE_CATEGORIES } from "@/types/domain";
+import { canCreateIssue, canEditIssue, canViewIssues } from "@/services/permission.service";
 import {
+  canTransitionIssueStatus,
+  getAvailableIssueStatusTransitions,
+  ISSUE_STATUS_TRANSITIONS,
+} from "@/lib/issue-status";
+import {
+  ACTIVITY_ACTION_TYPES,
+  ACTIVITY_ACTIONS,
+  ISSUE_CATEGORIES,
+  type IssueStatus,
+} from "@/types/domain";
+import {
+  changeIssueStatusSchema,
   createIssueSchema,
   issueCategorySchema,
   issueDescriptionSchema,
@@ -73,6 +86,7 @@ import {
   issuePrioritySchema,
   issueProjectIdSchema,
   issueTitleSchema,
+  updateIssueSchema,
 } from "@/validators/issue";
 
 import { isValid, VerifyHarness } from "./lib/verify-harness";
@@ -251,6 +265,112 @@ section("Priority validation", [
   {
     description: "maps 'critical' to the label 'Critical'",
     test: () => issuePriorityLabel("critical") === "Critical",
+  },
+]);
+
+section("Problem update validation", [
+  {
+    description: "accepts valid editable fields and strips protected fields",
+    test: () => {
+      const parsed = updateIssueSchema.parse({
+        title: "Updated title",
+        priority: "high",
+        workspaceId: objectId().toString(),
+        status: "closed",
+      });
+      return (
+        parsed.title === "Updated title" &&
+        parsed.priority === "high" &&
+        !("workspaceId" in parsed) &&
+        !("status" in parsed)
+      );
+    },
+  },
+  {
+    description: "accepts null to clear an optional project",
+    test: () => updateIssueSchema.safeParse({ projectId: null }).success,
+  },
+  {
+    description: "rejects malformed project ids",
+    test: () => !updateIssueSchema.safeParse({ projectId: "bad-id" }).success,
+  },
+  {
+    description: "rejects invalid category, priority, title, and description",
+    test: () =>
+      !updateIssueSchema.safeParse({ category: "design" }).success &&
+      !updateIssueSchema.safeParse({ priority: "urgent" }).success &&
+      !updateIssueSchema.safeParse({ title: "ab" }).success &&
+      !updateIssueSchema.safeParse({ description: "too short" }).success,
+  },
+  {
+    description: "rejects an empty update payload",
+    test: () => !updateIssueSchema.safeParse({}).success,
+  },
+]);
+
+section("Problem status request validation", [
+  {
+    description: "accepts only existing IssueStatus values",
+    test: () =>
+      ["new", "analyzing", "planned", "in_progress", "verification", "resolved", "closed"].every(
+        (status) => changeIssueStatusSchema.safeParse({ status }).success,
+      ) &&
+      ["unknown", "pending", "done", "complete", "random"].every(
+        (status) => !changeIssueStatusSchema.safeParse({ status }).success,
+      ),
+  },
+]);
+
+section("Problem lifecycle transition matrix", [
+  {
+    description: "contains exactly the defined valid forward and backward transitions",
+    test: () =>
+      JSON.stringify(ISSUE_STATUS_TRANSITIONS) ===
+      JSON.stringify({
+        new: ["analyzing"],
+        analyzing: ["planned", "new"],
+        planned: ["in_progress", "analyzing"],
+        in_progress: ["verification", "planned"],
+        verification: ["resolved", "in_progress"],
+        resolved: ["closed", "in_progress"],
+        closed: ["resolved"],
+      }),
+  },
+  {
+    description: "every allowed edge is accepted and every other status jump is rejected",
+    test: () =>
+      Object.keys(ISSUE_STATUS_TRANSITIONS).every((from) =>
+        Object.keys(ISSUE_STATUS_TRANSITIONS).every((to) => {
+          const allowed = ISSUE_STATUS_TRANSITIONS[from as keyof typeof ISSUE_STATUS_TRANSITIONS];
+          return (
+            canTransitionIssueStatus(
+              from as keyof typeof ISSUE_STATUS_TRANSITIONS,
+              to as keyof typeof ISSUE_STATUS_TRANSITIONS,
+            ) === allowed.includes(to as never)
+          );
+        }),
+      ),
+  },
+  {
+    description: "available status options expose only allowed next statuses",
+    test: () =>
+      Object.entries(ISSUE_STATUS_TRANSITIONS).every(
+        ([status, available]) =>
+          JSON.stringify(
+            getAvailableIssueStatusTransitions(status as keyof typeof ISSUE_STATUS_TRANSITIONS),
+          ) === JSON.stringify(available),
+      ),
+  },
+]);
+
+section("Problem edit permission", [
+  {
+    description: "owner/admin can edit all and a member edits only their own",
+    test: () =>
+      canEditIssue("owner", "creator", "other") &&
+      canEditIssue("admin", "creator", "other") &&
+      canEditIssue("member", "creator", "creator") &&
+      !canEditIssue("member", "creator", "other"),
   },
 ]);
 
@@ -715,6 +835,15 @@ section("Project association authorization", [
 /* -------------------------------------------------------------------------- */
 /* 9. Activity logging                                                        */
 /* -------------------------------------------------------------------------- */
+
+section("issue.status_changed activity action", [
+  {
+    description: "issue.status_changed is a known activity action",
+    test: () =>
+      (ACTIVITY_ACTIONS as readonly string[]).includes("issue.status_changed") &&
+      ACTIVITY_ACTION_TYPES.ISSUE_STATUS_CHANGED === "issue.status_changed",
+  },
+]);
 
 section("issue.created activity", [
   {
@@ -1279,9 +1408,11 @@ console.log("\nLive service checks");
 if (!isDatabaseConfigured()) {
   console.log("  · skipped: set MONGODB_URI in .env.local to run the service-level checks");
   console.log(
-    "    (creation per role, cross-workspace and cross-project rejection, activity, retrieval,",
+    "    (creation/edit/status permissions, all lifecycle transitions, resolvedAt, activity,",
   );
-  console.log("     plus search, filters, sorting, pagination and isolation over seeded data)");
+  console.log(
+    "     cross-workspace checks, issue updates, search, filters, sorting and pagination)",
+  );
 } else {
   console.log("  · running against the configured database");
 
@@ -1337,6 +1468,30 @@ if (!isDatabaseConfigured()) {
 
   const liveHarness = new VerifyHarness();
   const createdIssueIds: string[] = [];
+  const createStatusFixture = async (
+    status: IssueStatus,
+    createdBy: Types.ObjectId = owner._id,
+    workspaceId: Types.ObjectId = workspaceA._id,
+  ): Promise<string> => {
+    const issue = await models.Issue.create({
+      workspaceId,
+      projectId: null,
+      createdBy,
+      assignedTo: null,
+      title: `Status fixture ${status} ${createdIssueIds.length}`,
+      description: VALID_DESCRIPTION,
+      category: "other",
+      status,
+      priority: "medium",
+      source: "text",
+      aiConfidence: null,
+      estimatedMinutes: null,
+      resolvedAt: status === "resolved" ? new Date() : null,
+    });
+    const issueId = String(issue._id);
+    createdIssueIds.push(issueId);
+    return issueId;
+  };
 
   /**
    * A deterministic data set for the list checks (Task 12).
@@ -1916,6 +2071,15 @@ if (!isDatabaseConfigured()) {
       },
     },
     {
+      description: "a nonexistent Problem returns not found",
+      test: async () =>
+        (
+          await thrown(() =>
+            getIssueById(String(member._id), String(workspaceA._id), String(objectId())),
+          )
+        )?.statusCode === 404,
+    },
+    {
       description: "the workspace list contains only its own problems",
       test: async () => {
         const [listA, listB] = await Promise.all([
@@ -1927,6 +2091,388 @@ if (!isDatabaseConfigured()) {
           listA.issues.every((issue) => issue.workspaceId === String(workspaceA._id)) &&
           listB.issues.length === 0 &&
           listB.pagination.total === 0
+        );
+      },
+    },
+  ]);
+
+  liveHarness.section("Problem editing and authorization", [
+    {
+      description: "owner can update a Problem and protected fields are ignored",
+      test: async () => {
+        const issueId = createdIssueIds[0];
+        if (!issueId) return false;
+        const original = await models.Issue.findById(issueId).lean();
+        const activityCountBefore = await models.ActivityLog.countDocuments({
+          issueId: new Types.ObjectId(issueId),
+          action: "issue.updated",
+        });
+        const updated = await updateIssue(String(owner._id), String(workspaceA._id), issueId, {
+          title: "Owner updated Problem title",
+          priority: "high",
+          status: "closed",
+          source: "voice",
+          workspaceId: String(workspaceB._id),
+          createdBy: String(outsider._id),
+          createdAt: new Date(0),
+          aiConfidence: 0.9,
+          resolvedAt: new Date(),
+        });
+        const stored = await models.Issue.findById(issueId).lean();
+        const updatedActivity = await models.ActivityLog.findOne({
+          issueId: new Types.ObjectId(issueId),
+          action: "issue.updated",
+        })
+          .sort({ createdAt: -1 })
+          .lean();
+        const updateMetadata = updatedActivity?.metadata as Record<string, unknown> | undefined;
+        return Boolean(
+          original &&
+          stored &&
+          updateMetadata &&
+          Array.isArray(updateMetadata.changedFields) &&
+          (updateMetadata.changedFields as string[]).includes("title") &&
+          (updateMetadata.changedFields as string[]).includes("priority") &&
+          (await models.ActivityLog.countDocuments({
+            issueId: new Types.ObjectId(issueId),
+            action: "issue.updated",
+          })) ===
+            activityCountBefore + 1 &&
+          updated.title === "Owner updated Problem title" &&
+          updated.priority === "high" &&
+          stored.status === original.status &&
+          String(stored.workspaceId) === String(original.workspaceId) &&
+          String(stored.createdBy) === String(original.createdBy) &&
+          stored.source === original.source &&
+          stored.aiConfidence === original.aiConfidence &&
+          stored.resolvedAt === original.resolvedAt &&
+          stored.createdAt.getTime() === original.createdAt.getTime(),
+        );
+      },
+    },
+    {
+      description: "admin can edit another member's Problem",
+      test: async () => {
+        const issueId = createdIssueIds[0];
+        if (!issueId) return false;
+        return (
+          (
+            await updateIssue(String(admin._id), String(workspaceA._id), issueId, {
+              category: "technical",
+            })
+          ).category === "technical"
+        );
+      },
+    },
+    {
+      description: "member can edit their own Problem",
+      test: async () => {
+        const issueId = createdIssueIds[2];
+        if (!issueId) return false;
+        return (
+          (
+            await updateIssue(String(member._id), String(workspaceA._id), issueId, {
+              priority: "critical",
+            })
+          ).priority === "critical"
+        );
+      },
+    },
+    {
+      description: "member cannot edit another member's Problem",
+      test: async () => {
+        const issueId = createdIssueIds[0];
+        return Boolean(
+          issueId &&
+          (
+            await thrown(() =>
+              updateIssue(String(member._id), String(workspaceA._id), issueId, { priority: "low" }),
+            )
+          )?.statusCode === 403,
+        );
+      },
+    },
+    {
+      description: "a same-workspace project can be assigned",
+      test: async () => {
+        const issueId = createdIssueIds[0];
+        if (!issueId) return false;
+        return (
+          (
+            await updateIssue(String(owner._id), String(workspaceA._id), issueId, {
+              projectId: String(projectA2._id),
+            })
+          ).projectId === String(projectA2._id)
+        );
+      },
+    },
+    {
+      description: "cross-workspace project assignment is rejected",
+      test: async () => {
+        const issueId = createdIssueIds[0];
+        return Boolean(
+          issueId &&
+          (
+            await thrown(() =>
+              updateIssue(String(owner._id), String(workspaceA._id), issueId, {
+                projectId: String(projectB._id),
+              }),
+            )
+          )?.statusCode === 403,
+        );
+      },
+    },
+    {
+      description: "cross-workspace Problem access remains not found",
+      test: async () => {
+        const issueId = createdIssueIds[0];
+        return Boolean(
+          issueId &&
+          (await thrown(() => getIssueById(String(outsider._id), String(workspaceB._id), issueId)))
+            ?.statusCode === 404,
+        );
+      },
+    },
+    {
+      description: "invalid update values are rejected",
+      test: async () => {
+        const issueId = createdIssueIds[0];
+        return Boolean(
+          issueId &&
+          (
+            await thrown(() =>
+              updateIssue(String(owner._id), String(workspaceA._id), issueId, { title: "ab" }),
+            )
+          )?.statusCode === 400,
+        );
+      },
+    },
+  ]);
+
+  for (const [from, targets] of Object.entries(ISSUE_STATUS_TRANSITIONS)) {
+    for (const to of targets) {
+      liveHarness.section(`Status transition ${from} → ${to}`, [
+        {
+          description: "an authorized owner can perform this allowed transition",
+          test: async () => {
+            const issueId = await createStatusFixture(from as IssueStatus);
+            const updated = await changeIssueStatus(
+              String(owner._id),
+              String(workspaceA._id),
+              issueId,
+              { status: to },
+            );
+            return updated.status === to;
+          },
+        },
+      ]);
+    }
+  }
+
+  liveHarness.section("Status permissions and invalid transitions", [
+    {
+      description: "an invalid jump is rejected without writing activity",
+      test: async () => {
+        const issueId = await createStatusFixture("new");
+        const before = await models.ActivityLog.countDocuments({
+          issueId: new Types.ObjectId(issueId),
+          action: "issue.status_changed",
+        });
+        const error = await thrown(() =>
+          changeIssueStatus(String(owner._id), String(workspaceA._id), issueId, {
+            status: "resolved",
+          }),
+        );
+        const after = await models.ActivityLog.countDocuments({
+          issueId: new Types.ObjectId(issueId),
+          action: "issue.status_changed",
+        });
+        return error?.statusCode === 400 && before === after;
+      },
+    },
+    {
+      description: "an admin can change a Problem status",
+      test: async () => {
+        const issueId = await createStatusFixture("new");
+        return (
+          (
+            await changeIssueStatus(String(admin._id), String(workspaceA._id), issueId, {
+              status: "analyzing",
+            })
+          ).status === "analyzing"
+        );
+      },
+    },
+    {
+      description: "a member can change status on their own Problem",
+      test: async () => {
+        const issueId = await createStatusFixture("new", member._id);
+        return (
+          (
+            await changeIssueStatus(String(member._id), String(workspaceA._id), issueId, {
+              status: "analyzing",
+            })
+          ).status === "analyzing"
+        );
+      },
+    },
+    {
+      description: "a member cannot change another member's Problem status",
+      test: async () => {
+        const issueId = await createStatusFixture("new");
+        return (
+          (
+            await thrown(() =>
+              changeIssueStatus(String(member._id), String(workspaceA._id), issueId, {
+                status: "analyzing",
+              }),
+            )
+          )?.statusCode === 403
+        );
+      },
+    },
+    {
+      description: "a Workspace A member cannot change a Workspace B Problem",
+      test: async () => {
+        const issueId = await createStatusFixture("new", outsider._id, workspaceB._id);
+        return (
+          (
+            await thrown(() =>
+              changeIssueStatus(String(owner._id), String(workspaceA._id), issueId, {
+                status: "analyzing",
+              }),
+            )
+          )?.statusCode === 404
+        );
+      },
+    },
+    {
+      description: "a repeated identical status request is a no-op without another activity",
+      test: async () => {
+        const issueId = await createStatusFixture("new");
+        await changeIssueStatus(String(owner._id), String(workspaceA._id), issueId, {
+          status: "analyzing",
+        });
+        const before = await models.ActivityLog.countDocuments({
+          issueId: new Types.ObjectId(issueId),
+          action: "issue.status_changed",
+        });
+        await changeIssueStatus(String(owner._id), String(workspaceA._id), issueId, {
+          status: "analyzing",
+        });
+        const after = await models.ActivityLog.countDocuments({
+          issueId: new Types.ObjectId(issueId),
+          action: "issue.status_changed",
+        });
+        return before === 1 && after === before;
+      },
+    },
+    {
+      description: "a valid transition logs structured from/to metadata",
+      test: async () => {
+        const issueId = await createStatusFixture("new");
+        await changeIssueStatus(String(owner._id), String(workspaceA._id), issueId, {
+          status: "analyzing",
+        });
+        const activity = await models.ActivityLog.findOne({
+          issueId: new Types.ObjectId(issueId),
+          action: "issue.status_changed",
+        }).lean();
+        const metadata = activity?.metadata as Record<string, unknown> | undefined;
+        return (
+          metadata?.from === "new" && metadata.to === "analyzing" && metadata.issueId === issueId
+        );
+      },
+    },
+  ]);
+
+  liveHarness.section("Resolved timestamp lifecycle", [
+    {
+      description: "resolvedAt is set, cleared on reopening, and set again on re-resolution",
+      test: async () => {
+        const issueId = await createStatusFixture("verification");
+        const resolved = await changeIssueStatus(
+          String(owner._id),
+          String(workspaceA._id),
+          issueId,
+          { status: "resolved" },
+        );
+        const firstResolvedAt = resolved.resolvedAt?.getTime();
+        if (!firstResolvedAt) return false;
+        const reopened = await changeIssueStatus(
+          String(owner._id),
+          String(workspaceA._id),
+          issueId,
+          { status: "in_progress" },
+        );
+        if (reopened.resolvedAt !== null) return false;
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        await changeIssueStatus(String(owner._id), String(workspaceA._id), issueId, {
+          status: "verification",
+        });
+        const resolvedAgain = await changeIssueStatus(
+          String(owner._id),
+          String(workspaceA._id),
+          issueId,
+          { status: "resolved" },
+        );
+        return (
+          resolvedAgain.resolvedAt !== null && resolvedAgain.resolvedAt.getTime() > firstResolvedAt
+        );
+      },
+    },
+  ]);
+
+  liveHarness.section("Update activity", [
+    {
+      description: "an unchanged save creates no issue.updated event",
+      test: async () => {
+        const issueId = createdIssueIds[0];
+        if (!issueId) return false;
+        const current = await getIssueById(String(owner._id), String(workspaceA._id), issueId);
+        const before = await models.ActivityLog.countDocuments({
+          issueId: new Types.ObjectId(issueId),
+          action: "issue.updated",
+        });
+        await updateIssue(String(owner._id), String(workspaceA._id), issueId, {
+          title: current.title,
+          description: current.description,
+          category: current.category,
+          priority: current.priority,
+          projectId: current.projectId,
+        });
+        const after = await models.ActivityLog.countDocuments({
+          issueId: new Types.ObjectId(issueId),
+          action: "issue.updated",
+        });
+        return before === after;
+      },
+    },
+    {
+      description: "multiple changed fields create one activity record without description content",
+      test: async () => {
+        const issueId = createdIssueIds[0];
+        if (!issueId) return false;
+        const before = await models.ActivityLog.countDocuments({
+          issueId: new Types.ObjectId(issueId),
+          action: "issue.updated",
+        });
+        await updateIssue(String(owner._id), String(workspaceA._id), issueId, {
+          priority: "critical",
+          description: "Updated description with sufficient detail.",
+        });
+        const entries = await models.ActivityLog.find({
+          issueId: new Types.ObjectId(issueId),
+          action: "issue.updated",
+        })
+          .sort({ createdAt: -1 })
+          .lean();
+        const metadata = entries[0]?.metadata as Record<string, unknown> | undefined;
+        return (
+          entries.length === before + 1 &&
+          Array.isArray(metadata?.changedFields) &&
+          (metadata.changedFields as string[]).includes("priority") &&
+          !JSON.stringify(metadata).includes("Updated description with sufficient detail.")
         );
       },
     },

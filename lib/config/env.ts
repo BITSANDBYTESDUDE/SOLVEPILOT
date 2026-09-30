@@ -62,6 +62,10 @@ const serverEnvSchema = z.object({
     .transform((value) => value === "true" || value === "1"),
 
   /* Uploads */
+  MAX_ATTACHMENT_SIZE_MB: z.coerce.number().int().min(1).max(100).default(25),
+  MAX_EXTRACTION_PAGES: z.coerce.number().int().min(1).max(2000).default(200),
+  MAX_EXTRACTED_CHARACTERS: z.coerce.number().int().min(1).max(5_000_000).default(500_000),
+  MAX_EXTRACTION_ROWS: z.coerce.number().int().min(1).max(100_000).default(10_000),
   UPLOAD_MAX_IMAGE_BYTES: z.coerce
     .number()
     .int()

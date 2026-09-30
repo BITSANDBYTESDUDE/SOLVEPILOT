@@ -131,23 +131,27 @@ Copy the template and fill in values:
 cp .env.example .env.local
 ```
 
-| Variable                                                                                           | Required      | Purpose                                                 |
-| -------------------------------------------------------------------------------------------------- | ------------- | ------------------------------------------------------- |
-| `MONGODB_URI`                                                                                      | yes           | MongoDB connection string.                              |
-| `MONGODB_DB_NAME`                                                                                  | no            | Overrides the database name when the URI omits it.      |
-| `AUTH_SECRET`                                                                                      | yes           | Session encryption key — `openssl rand -base64 32`.     |
-| `AUTH_URL`                                                                                         | yes           | Canonical app URL (OAuth callbacks, share links).       |
-| `AUTH_TRUST_HOST`                                                                                  | no            | `true` when running behind a proxy that terminates TLS. |
-| `OPENAI_API_KEY`                                                                                   | yes           | Server-side AI calls.                                   |
-| `OPENAI_MODEL`                                                                                     | no            | Defaults to `gpt-4o-mini`.                              |
-| `OPENAI_MAX_OUTPUT_TOKENS`, `OPENAI_TIMEOUT_MS`                                                    | no            | Output and latency guardrails.                          |
-| `STORAGE_ENDPOINT`, `STORAGE_REGION`, `STORAGE_ACCESS_KEY`, `STORAGE_SECRET_KEY`, `STORAGE_BUCKET` | yes (uploads) | S3-compatible object storage.                           |
-| `STORAGE_FORCE_PATH_STYLE`                                                                         | no            | `true` for MinIO and most self-hosted gateways.         |
-| `UPLOAD_MAX_IMAGE_BYTES`, `UPLOAD_MAX_DOCUMENT_BYTES`, `UPLOAD_MAX_AUDIO_BYTES`                    | no            | Upload limits (defaults 8 MB / 20 MB / 25 MB).          |
-| `PDF_ENABLED`, `PUPPETEER_EXECUTABLE_PATH`                                                         | no            | Report rendering switches.                              |
-| `NEXT_PUBLIC_APP_URL`                                                                              | yes           | Absolute base URL for metadata and links.               |
-| `NEXT_PUBLIC_APP_NAME`                                                                             | no            | Display name.                                           |
-| `LOG_LEVEL`                                                                                        | no            | `debug` / `info` / `warn` / `error`.                    |
+| Variable                                                                                           | Required           | Purpose                                                                    |
+| -------------------------------------------------------------------------------------------------- | ------------------ | -------------------------------------------------------------------------- |
+| `MONGODB_URI`                                                                                      | yes                | MongoDB connection string.                                                 |
+| `MONGODB_DB_NAME`                                                                                  | no                 | Overrides the database name when the URI omits it.                         |
+| `AUTH_SECRET`                                                                                      | yes                | Session encryption key — `openssl rand -base64 32`.                        |
+| `AUTH_URL`                                                                                         | yes                | Canonical app URL (OAuth callbacks, share links).                          |
+| `AUTH_TRUST_HOST`                                                                                  | no                 | `true` when running behind a proxy that terminates TLS.                    |
+| `OPENAI_API_KEY`                                                                                   | yes                | Server-side AI calls.                                                      |
+| `OPENAI_MODEL`                                                                                     | no                 | Defaults to `gpt-4o-mini`.                                                 |
+| `OPENAI_MAX_OUTPUT_TOKENS`, `OPENAI_TIMEOUT_MS`                                                    | no                 | Output and latency guardrails.                                             |
+| `STORAGE_ENDPOINT`, `STORAGE_REGION`, `STORAGE_ACCESS_KEY`, `STORAGE_SECRET_KEY`, `STORAGE_BUCKET` | production uploads | S3-compatible private object storage.                                      |
+| `STORAGE_FORCE_PATH_STYLE`                                                                         | no                 | `true` for MinIO and most self-hosted gateways.                            |
+| `UPLOAD_MAX_IMAGE_BYTES`, `UPLOAD_MAX_DOCUMENT_BYTES`, `UPLOAD_MAX_AUDIO_BYTES`                    | no                 | Upload limits for future input processors (defaults 8 MB / 20 MB / 25 MB). |
+| `MAX_ATTACHMENT_SIZE_MB`                                                                           | no                 | Per-attachment file limit (default 25 MB; maximum 100 MB).                 |
+| `MAX_EXTRACTION_PAGES`                                                                             | no                 | PDF extraction limit (default 200 pages; maximum 2,000).                   |
+| `MAX_EXTRACTED_CHARACTERS`                                                                         | no                 | Text extraction limit (default 500,000; maximum 5,000,000).                |
+| `MAX_EXTRACTION_ROWS`                                                                              | no                 | CSV row limit (default 10,000; maximum 100,000).                           |
+| `PDF_ENABLED`, `PUPPETEER_EXECUTABLE_PATH`                                                         | no                 | Report rendering switches.                                                 |
+| `NEXT_PUBLIC_APP_URL`                                                                              | yes                | Absolute base URL for metadata and links.                                  |
+| `NEXT_PUBLIC_APP_NAME`                                                                             | no                 | Display name.                                                              |
+| `LOG_LEVEL`                                                                                        | no                 | `debug` / `info` / `warn` / `error`.                                       |
 
 Secrets are read only through `lib/config/env.ts`, validated with Zod, and never exposed to
 the browser (there is no `NEXT_PUBLIC_` AI or storage variable).
@@ -393,7 +397,22 @@ docker run -p 9000:9000 -p 9001:9001 minio/minio server /data --console-address 
 ```
 
 Set `STORAGE_ENDPOINT=http://127.0.0.1:9000` and `STORAGE_FORCE_PATH_STYLE=true`. Buckets
-stay private; the application serves short-lived signed URLs.
+stay private. In development, if S3-compatible credentials are not configured, attachments use
+an ignored `.storage/private/` directory outside `public/`; production requires a configured
+private object store. Downloads are proxied through authenticated Issue attachment routes, so
+storage keys and provider URLs are never sent to browsers. Each new attachment stores a SHA-256
+checksum and, when its signature can be detected reliably, a detected MIME type. Duplicate content
+is rejected within the same Issue (the same bytes can be attached to another Issue). Attachments
+start in `uploaded`; the internal processing service enforces `uploaded → queued → processing →
+processed/failed`, with `failed → queued` reserved for an explicit retry. No processing worker is
+started automatically. The failed-state retry endpoint only queues the item; it does not process it.
+
+Manual content extraction supports UTF-8 plain text, CSV, text-based PDF, and DOCX. Extracted text
+lives in the separate `attachment_contents` collection (one record per attachment), is normalized,
+and is capped by `MAX_EXTRACTED_CHARACTERS`. PDFs also preserve page labels and obey
+`MAX_EXTRACTION_PAGES`; CSV extraction stops at `MAX_EXTRACTION_ROWS`. The Issue attachment page
+provides Extract, Retry, and View Extracted Content controls. Images and legacy Office formats are
+not extracted; there is no OCR or background extraction worker.
 
 ---
 
@@ -495,12 +514,12 @@ SolvePilot is built incrementally, and the application stays runnable after ever
 | 10  | Activity logging                                               | ✅ Done    |
 | 11  | Issue/problem creation                                         | ✅ Done    |
 | 12  | Issue list with search, filter, sort, pagination               | ✅ Done    |
-| 13  | Issue detail page                                              | ⏳ Planned |
-| 14  | Issue status workflow                                          | ⏳ Planned |
-| 15  | Secure file uploads                                            | ⏳ Planned |
-| 16  | Centralized AI service                                         | ⏳ Planned |
-| 17  | AI classification                                              | ⏳ Planned |
-| 18  | AI diagnosis                                                   | ⏳ Planned |
+| 13  | Issue detail page                                              | ✅ Done    |
+| 14  | Issue status workflow                                          | ✅ Done    |
+| 15  | Secure file uploads / Issue attachments                        | ✅ Done    |
+| 16  | Attachment processing pipeline and file metadata               | ✅ Done    |
+| 17  | Attachment content extraction pipeline                         | ✅ Done    |
+| 18  | OCR and image content extraction                               | ⏳ Planned |
 | 19  | AI solution planning                                           | ⏳ Planned |
 | 20  | AI task generation                                             | ⏳ Planned |
 | 21  | AI run logging                                                 | ⏳ Planned |
@@ -524,14 +543,10 @@ SolvePilot is built incrementally, and the application stays runnable after ever
 | 39  | Unit, integration, API and E2E tests                           | ⏳ Planned |
 | 40  | Production readiness, deployment config and documentation      | ⏳ Planned |
 
-**Current state:** the foundation, architecture, database layer, authentication, user
-profile, workspaces, projects, dashboard statistics and activity logging are in place —
-design system, shared error/logger/config layers, marketing landing page, 15 Mongoose models
-with indexes (`npm run db:verify` → 79/79 schema checks pass), registration, sign-in and
-sign-out with revocable server-side sessions (`npm run auth:verify` → 39/39 checks pass),
-`/dashboard/settings` for profile, appearance and password (`npm run profile:verify` → 26/26
-checks pass), multi-workspace tenancy with a switcher (`npm run workspace:verify` → 78/78
-checks pass), and projects (`npm run project:verify` → 47/47 checks pass).
+**Current state:** Tasks 1–17 are complete. `npm run verify` passes formatting, ESLint,
+TypeScript, and the production build. The current verification scripts pass: issues 138/138,
+attachments 20/20, extraction 17/17, activity 34/34, and database/model checks 83/83.
+MongoDB-backed service and persistence checks are skipped unless `MONGODB_URI` is configured.
 
 Task 11 adds the first step of the problem-solving workflow: `/dashboard/issues/new`
 (creation form) and `/dashboard/issues/[issueId]` (detail, with a visual AI Analysis
@@ -541,14 +556,29 @@ layout, so no page under it can forget its own check.
 
 Task 12 turns `/dashboard/issues` into the management view for that data: debounced search
 over title and description, status / priority / category / project filters, seven sort
-orders and cursor-free page pagination — all executed by MongoDB against the
-`workspaceId`-leading indexes above, never in the browser. The list state round-trips
-through the URL (`?search=navbar&status=new&priority=high&page=2`), so a filtered view is
-shareable and survives a refresh. Priority ordering uses explicit weights
-(`critical 4 … low 1`) in an aggregation `$switch`, never an alphabetical sort of the
-enum. `npm run issue:verify` → 127/127 static checks pass, plus the live service and list
-checks when `MONGODB_URI` is set. No screenshots are included because the product UI
-beyond these screens does not exist yet.
+orders and page pagination — all executed by MongoDB against workspace-scoped queries. The
+list state round-trips through the URL (`?search=navbar&status=new&priority=high&page=2`),
+so a filtered view is shareable and survives a refresh. Priority ordering uses explicit
+weights (`critical 4 … low 1`) in an aggregation `$switch`. `npm run issue:verify` passes
+138 static checks; live service checks require `MONGODB_URI`.
+
+Tasks 13–17 are implemented as well:
+
+- **Task 13 — Issue detail:** `/dashboard/issues/[issueId]` presents the scoped Issue
+  details and its related workflow information through workspace-authorized APIs.
+- **Task 14 — Status workflow:** Issue status changes are validated against the lifecycle
+  transition rules and checked server-side; the UI exposes only allowed next statuses.
+- **Task 15 — Secure attachments:** Issue attachments use private storage and authorized
+  upload, download, and delete routes. Storage keys are not exposed to clients, and
+  duplicate file content is rejected within the same Issue.
+- **Task 16 — Attachment processing:** attachment metadata tracks checksum, detected MIME
+  type, category, and processing status separately from Issue data. The processing status
+  lifecycle supports explicit retry; no background processing worker is started.
+- **Task 17 — Content extraction:** authorized manual extraction supports TXT, CSV,
+  text-based PDF, and DOCX. Extracted text is normalized and stored separately from
+  attachment metadata, with configurable page, row, and character limits. Images and
+  scanned PDFs do not use OCR; extracted text is displayed as plain text, never HTML.
+  `npm run attachment:extraction:verify` passes 17 static checks.
 
 ---
 

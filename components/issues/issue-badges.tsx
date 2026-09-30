@@ -99,8 +99,10 @@ export function IssueUnavailableNotice({ className }: { className?: string }) {
       )}
     >
       <CircleAlert className="size-8 text-muted-foreground" aria-hidden="true" />
-      <p className="text-sm font-medium">Unable to load this problem.</p>
-      <p className="text-sm text-muted-foreground">Please try again.</p>
+      <p className="text-sm font-medium">Problem not found</p>
+      <p className="text-sm text-muted-foreground">
+        The problem may have been removed or you may not have access to it.
+      </p>
     </div>
   );
 }

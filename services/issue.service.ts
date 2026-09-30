@@ -13,11 +13,18 @@ import {
   type IssueSort,
 } from "@/lib/constants/issues";
 import { literalRegex, normalizeSearchTerm } from "@/lib/utils/search";
+import { canTransitionIssueStatus } from "@/lib/issue-status";
 import { Issue, Project, User, type IssueDocument } from "@/models";
 import { createActivity } from "@/services/activity.service";
-import { canCreateIssue, canViewIssues } from "@/services/permission.service";
+import { canCreateIssue, canEditIssue, canViewIssues } from "@/services/permission.service";
 import type { IssueCategory, IssuePriority, IssueSource, IssueStatus } from "@/types/domain";
-import { createIssueSchema, issueListQuerySchema, type IssueListQuery } from "@/validators/issue";
+import {
+  changeIssueStatusSchema,
+  createIssueSchema,
+  issueListQuerySchema,
+  updateIssueSchema,
+  type IssueListQuery,
+} from "@/validators/issue";
 
 const log = logger.child("issue:service");
 
@@ -44,7 +51,7 @@ export interface IssueDetail extends IssueSummary {
   /** Always null until planning runs (Task 19). */
   estimatedMinutes: number | null;
   resolvedAt: Date | null;
-  creatorEmail: string | null;
+  creatorAvatarUrl: string | null;
 }
 
 /** The subset of a list query that narrows the result set. */
@@ -185,7 +192,7 @@ export function issueCreatedMetadata(input: {
 
 interface IssueLookupMaps {
   projectNames: Map<string, string>;
-  creators: Map<string, { name: string; email: string }>;
+  creators: Map<string, { name: string; avatarUrl: string | null }>;
 }
 
 async function loadIssueLookups(issues: StoredIssue[]): Promise<IssueLookupMaps> {
@@ -202,14 +209,18 @@ async function loadIssueLookups(issues: StoredIssue[]): Promise<IssueLookupMaps>
       : Promise.resolve<Array<{ _id: Types.ObjectId; name: string }>>([]),
     creatorIds.length > 0
       ? User.find({ _id: { $in: creatorIds } })
-          .select("_id name email")
-          .lean<Array<{ _id: Types.ObjectId; name: string; email: string }>>()
-      : Promise.resolve<Array<{ _id: Types.ObjectId; name: string; email: string }>>([]),
+          .select("_id name avatarUrl")
+          .lean<Array<{ _id: Types.ObjectId; name: string; avatarUrl?: string | null }>>()
+      : Promise.resolve<Array<{ _id: Types.ObjectId; name: string; avatarUrl?: string | null }>>(
+          [],
+        ),
   ]);
 
   return {
     projectNames: new Map(projects.map((p) => [String(p._id), p.name])),
-    creators: new Map(creators.map((u) => [String(u._id), { name: u.name, email: u.email }])),
+    creators: new Map(
+      creators.map((u) => [String(u._id), { name: u.name, avatarUrl: u.avatarUrl ?? null }]),
+    ),
   };
 }
 
@@ -243,7 +254,7 @@ function toIssueDetail(issue: StoredIssue, lookups: IssueLookupMaps): IssueDetai
     aiConfidence: issue.aiConfidence,
     estimatedMinutes: issue.estimatedMinutes,
     resolvedAt: issue.resolvedAt,
-    creatorEmail: creator?.email ?? null,
+    creatorAvatarUrl: creator?.avatarUrl ?? null,
   };
 }
 
@@ -354,6 +365,159 @@ export async function getIssueById(
 
   const lookups = await loadIssueLookups([issue]);
   return toIssueDetail(issue, lookups);
+}
+
+/** Change a Problem's lifecycle status after server-side transition validation. */
+export async function changeIssueStatus(
+  userId: string,
+  workspaceId: string,
+  issueId: string,
+  input: unknown,
+): Promise<IssueDetail> {
+  const { membership } = await requireWorkspaceMember(userId, workspaceId);
+  if (!Types.ObjectId.isValid(issueId)) {
+    throw new NotFoundError("Problem not found.");
+  }
+
+  const parsed = changeIssueStatusSchema.safeParse(input);
+  if (!parsed.success) {
+    throw new ValidationError("Choose a valid status.", zodErrorToDetails(parsed.error));
+  }
+  const nextStatus = parsed.data.status;
+
+  await connectToDatabase();
+  const issue = await Issue.findOne({
+    _id: new Types.ObjectId(issueId),
+    workspaceId: new Types.ObjectId(workspaceId),
+  });
+  if (!issue) throw new NotFoundError("Problem not found.");
+  if (!canEditIssue(membership.role, String(issue.createdBy), userId)) {
+    throw new ForbiddenError("You don't have permission to change this problem's status.");
+  }
+
+  // Repeated requests (including a concurrent duplicate) are safe no-ops.
+  if (issue.status === nextStatus) {
+    const unchanged = issue.toObject({ transform: false }) as StoredIssue;
+    return toIssueDetail(unchanged, await loadIssueLookups([unchanged]));
+  }
+  if (!canTransitionIssueStatus(issue.status, nextStatus)) {
+    throw new ValidationError("This status transition is not allowed.");
+  }
+
+  const fromStatus = issue.status;
+  const setFields: { status: IssueStatus; resolvedAt?: Date | null } = { status: nextStatus };
+  if (nextStatus === "resolved") {
+    setFields.resolvedAt = new Date();
+  } else if (fromStatus === "resolved" && nextStatus === "in_progress") {
+    setFields.resolvedAt = null;
+  }
+
+  // Include the observed status in the update predicate to prevent stale writes.
+  const updated = await Issue.findOneAndUpdate(
+    {
+      _id: new Types.ObjectId(issueId),
+      workspaceId: new Types.ObjectId(workspaceId),
+      status: fromStatus,
+    },
+    { $set: setFields },
+    { new: true, runValidators: true },
+  );
+
+  if (!updated) {
+    const latest = await Issue.findOne({
+      _id: new Types.ObjectId(issueId),
+      workspaceId: new Types.ObjectId(workspaceId),
+    }).lean<StoredIssue | null>();
+    if (!latest) throw new NotFoundError("Problem not found.");
+    // Another request may have already completed this same transition.
+    if (latest.status === nextStatus) {
+      return toIssueDetail(latest, await loadIssueLookups([latest]));
+    }
+    throw new ValidationError("This status transition is not allowed.");
+  }
+
+  await createActivity({
+    workspaceId,
+    actorId: userId,
+    action: "issue.status_changed",
+    issueId,
+    metadata: { issueId, title: updated.title, from: fromStatus, to: nextStatus },
+  });
+
+  const stored = updated.toObject({ transform: false }) as StoredIssue;
+  return toIssueDetail(stored, await loadIssueLookups([stored]));
+}
+
+/** Update a Problem after workspace and ownership authorization. */
+export async function updateIssue(
+  userId: string,
+  workspaceId: string,
+  issueId: string,
+  input: unknown,
+): Promise<IssueDetail> {
+  const { membership } = await requireWorkspaceMember(userId, workspaceId);
+  if (!Types.ObjectId.isValid(issueId)) {
+    throw new NotFoundError("That problem does not exist in this workspace.");
+  }
+
+  const parsed = updateIssueSchema.safeParse(input);
+  if (!parsed.success) {
+    throw new ValidationError(
+      "Please check the problem details and try again.",
+      zodErrorToDetails(parsed.error),
+    );
+  }
+
+  await connectToDatabase();
+  const issue = await Issue.findOne({
+    _id: new Types.ObjectId(issueId),
+    workspaceId: new Types.ObjectId(workspaceId),
+  });
+  if (!issue) throw new NotFoundError("That problem does not exist in this workspace.");
+  if (!canEditIssue(membership.role, String(issue.createdBy), userId)) {
+    throw new ForbiddenError("You don't have permission to edit this problem.");
+  }
+
+  const data = parsed.data;
+  if (data.projectId) await resolveWorkspaceProject(data.projectId, workspaceId);
+
+  const changes: Array<{ field: string; from?: string; to?: string }> = [];
+  const changedFields: string[] = [];
+  for (const field of ["title", "description", "category", "priority"] as const) {
+    const nextValue = data[field];
+    if (nextValue !== undefined && nextValue !== issue[field]) {
+      const previousValue = issue[field];
+      issue.set(field, nextValue);
+      changedFields.push(field);
+      if (field === "category" || field === "priority") {
+        changes.push({ field, from: previousValue, to: nextValue });
+      }
+    }
+  }
+
+  if (data.projectId !== undefined) {
+    const previousProjectId = issue.projectId ? String(issue.projectId) : null;
+    if (data.projectId !== previousProjectId) {
+      issue.projectId = data.projectId ? new Types.ObjectId(data.projectId) : null;
+      changedFields.push("projectId");
+      // Project IDs stay out of human-facing activity copy; changedFields still audits the association.
+    }
+  }
+
+  if (changedFields.length > 0) {
+    await issue.save();
+    await createActivity({
+      workspaceId,
+      actorId: userId,
+      action: "issue.updated",
+      issueId,
+      metadata: { issueId, changedFields, changes },
+    });
+  }
+
+  const stored = issue.toObject({ transform: false }) as StoredIssue;
+  const lookups = await loadIssueLookups([stored]);
+  return toIssueDetail(stored, lookups);
 }
 
 /* -------------------------------------------------------------------------- */
