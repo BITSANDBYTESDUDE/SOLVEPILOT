@@ -1,20 +1,15 @@
-import { ArrowLeft, Calendar, FolderKanban, Sparkles, User } from "lucide-react";
+import { ArrowLeft, Calendar, FolderKanban, Pencil, Sparkles, User } from "lucide-react";
 import Link from "next/link";
 
-import {
-  IssueCategoryBadge,
-  IssuePriorityBadge,
-  IssueStatusBadge,
-} from "@/components/issues/issue-badges";
+import { IssueCategoryBadge, IssuePriorityBadge } from "@/components/issues/issue-badges";
+import { IssueStatusControl } from "@/components/issues/issue-status-control";
 import { Button } from "@/components/ui/button";
+import { IssueActivity } from "@/components/issues/issue-activity";
+import { IssueAttachments, type IssueAttachmentItem } from "@/components/issues/issue-attachments";
+import type { SafeActivityItem } from "@/services/activity.service";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
-import {
-  issueCategoryLabel,
-  issuePriorityLabel,
-  issueSourceLabel,
-  issueStatusLabel,
-} from "@/lib/constants/issues";
+import { issueCategoryLabel, issuePriorityLabel, issueSourceLabel } from "@/lib/constants/issues";
 import { formatDate, formatDateTime } from "@/lib/utils";
 import type { IssueDetail } from "@/services/issue.service";
 
@@ -28,9 +23,21 @@ import type { IssueDetail } from "@/services/issue.service";
 
 export interface IssueDetailViewProps {
   issue: IssueDetail;
+  activities: SafeActivityItem[];
+  attachments: IssueAttachmentItem[];
+  maxAttachmentSizeBytes: number;
+  canEdit: boolean;
+  saved?: boolean;
 }
 
-export function IssueDetailView({ issue }: IssueDetailViewProps) {
+export function IssueDetailView({
+  issue,
+  activities,
+  attachments,
+  maxAttachmentSizeBytes,
+  canEdit,
+  saved = false,
+}: IssueDetailViewProps) {
   return (
     <div className="flex flex-col gap-6">
       <Button variant="ghost" size="sm" asChild className="w-fit">
@@ -40,14 +47,40 @@ export function IssueDetailView({ issue }: IssueDetailViewProps) {
         </Link>
       </Button>
 
-      <header className="flex flex-col gap-3">
-        <h1 className="text-2xl font-semibold tracking-tight">{issue.title}</h1>
-        <div className="flex flex-wrap items-center gap-2">
-          <IssueStatusBadge status={issue.status} />
-          <IssuePriorityBadge priority={issue.priority} />
-          <IssueCategoryBadge category={issue.category} />
+      {saved ? (
+        <p
+          role="status"
+          className="rounded-md border border-emerald-500/30 bg-emerald-500/5 px-4 py-3 text-sm text-emerald-700"
+        >
+          Changes saved successfully.
+        </p>
+      ) : null}
+
+      <header className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="flex min-w-0 flex-col gap-3">
+          <h1 className="text-2xl font-semibold tracking-tight">{issue.title}</h1>
+          <div className="flex flex-wrap items-center gap-2">
+            <IssuePriorityBadge priority={issue.priority} />
+            <IssueCategoryBadge category={issue.category} />
+          </div>
         </div>
+        {canEdit ? (
+          <Button asChild>
+            <Link href={`/dashboard/issues/${issue.id}/edit`}>
+              <Pencil className="size-4" aria-hidden="true" /> Edit Problem
+            </Link>
+          </Button>
+        ) : null}
       </header>
+
+      <IssueStatusControl
+        key={issue.status}
+        workspaceId={issue.workspaceId}
+        issueId={issue.id}
+        issueTitle={issue.title}
+        initialStatus={issue.status}
+        canChangeStatus={canEdit}
+      />
 
       <Card>
         <CardHeader>
@@ -78,25 +111,22 @@ export function IssueDetailView({ issue }: IssueDetailViewProps) {
             </div>
 
             <div className="flex flex-col gap-1">
-              <dt className="text-xs font-medium text-muted-foreground">Status</dt>
-              <dd className="text-sm font-medium">{issueStatusLabel(issue.status)}</dd>
-            </div>
-
-            <div className="flex flex-col gap-1">
               <dt className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
                 <FolderKanban className="size-3.5" aria-hidden="true" />
                 Project
               </dt>
               <dd className="text-sm font-medium">
-                {issue.projectId ? (
+                {issue.projectId && issue.projectName ? (
                   <Link
                     href={`/dashboard/projects/${issue.projectId}`}
                     className="underline-offset-4 hover:underline"
                   >
-                    {issue.projectName ?? "Project"}
+                    {issue.projectName}
                   </Link>
                 ) : (
-                  <span className="text-muted-foreground">No project</span>
+                  <span className="text-muted-foreground">
+                    {issue.projectId ? "Project unavailable" : "No project"}
+                  </span>
                 )}
               </dd>
             </div>
@@ -106,13 +136,15 @@ export function IssueDetailView({ issue }: IssueDetailViewProps) {
                 <User className="size-3.5" aria-hidden="true" />
                 Created by
               </dt>
-              <dd className="text-sm font-medium">
-                {issue.creatorName ?? "Workspace member"}
-                {issue.creatorEmail ? (
-                  <span className="block text-xs font-normal text-muted-foreground">
-                    {issue.creatorEmail}
-                  </span>
+              <dd className="flex items-center gap-2 text-sm font-medium">
+                {issue.creatorAvatarUrl ? (
+                  <span
+                    aria-hidden="true"
+                    className="size-8 shrink-0 rounded-full bg-cover bg-center"
+                    style={{ backgroundImage: `url("${issue.creatorAvatarUrl}")` }}
+                  />
                 ) : null}
+                {issue.creatorName ?? "Workspace member"}
               </dd>
             </div>
 
@@ -126,13 +158,43 @@ export function IssueDetailView({ issue }: IssueDetailViewProps) {
                   {formatDate(issue.createdAt)}
                 </time>
                 <span className="block text-xs font-normal text-muted-foreground">
-                  {formatDateTime(issue.createdAt)} · captured as {issueSourceLabel(issue.source)}
+                  {formatDateTime(issue.createdAt)}
                 </span>
               </dd>
+            </div>
+
+            <div className="flex flex-col gap-1">
+              <dt className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                <Calendar className="size-3.5" aria-hidden="true" />
+                Last updated
+              </dt>
+              <dd className="text-sm font-medium">
+                <time dateTime={new Date(issue.updatedAt).toISOString()}>
+                  {formatDate(issue.updatedAt)}
+                </time>
+                <span className="block text-xs font-normal text-muted-foreground">
+                  {formatDateTime(issue.updatedAt)}
+                </span>
+              </dd>
+            </div>
+
+            <div className="flex flex-col gap-1">
+              <dt className="text-xs font-medium text-muted-foreground">Source</dt>
+              <dd className="text-sm font-medium">{issueSourceLabel(issue.source)}</dd>
             </div>
           </dl>
         </CardContent>
       </Card>
+
+      <IssueAttachments
+        workspaceId={issue.workspaceId}
+        issueId={issue.id}
+        attachments={attachments}
+        maxFileSizeBytes={maxAttachmentSizeBytes}
+        canManage={canEdit}
+      />
+
+      <IssueActivity activities={activities} />
 
       {/* Future AI workflow — placeholder only. No model call, no mock output. */}
       <Card>

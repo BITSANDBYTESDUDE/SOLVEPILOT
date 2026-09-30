@@ -77,6 +77,8 @@ const MODELS: ModelEntry[] = [
   entry("Workspace", models.Workspace),
   entry("Project", models.Project),
   entry("Issue", models.Issue),
+  entry("IssueAttachment", models.IssueAttachment),
+  entry("AttachmentContent", models.AttachmentContent),
   entry("IssueInput", models.IssueInput),
   entry("Diagnosis", models.Diagnosis),
   entry("SolutionPlan", models.SolutionPlan),
@@ -592,6 +594,33 @@ section("Index coverage", [
   {
     description: "Evidence issue index",
     test: () => indexNamesOf(models.Evidence).includes("issueId+type+createdAt"),
+  },
+  {
+    description: "IssueAttachment issue/checksum unique partial index",
+    test: () => {
+      const schemaIndexes = models.IssueAttachment.schema.indexes();
+      const checksumIndex = schemaIndexes.find(
+        ([fields]) =>
+          Object.keys(fields as Record<string, unknown>).join("+") === "issueId+checksum",
+      );
+      return (
+        Boolean(checksumIndex) &&
+        checksumIndex?.[1].unique === true &&
+        (checksumIndex?.[1].partialFilterExpression as { checksum?: { $type?: string } })?.checksum
+          ?.$type === "string"
+      );
+    },
+  },
+  {
+    description: "AttachmentContent has one unique content row per attachment",
+    test: () => {
+      const index = models.AttachmentContent.schema
+        .indexes()
+        .find(
+          ([fields]) => Object.keys(fields as Record<string, unknown>).join("+") === "attachmentId",
+        );
+      return index?.[1].unique === true;
+    },
   },
   {
     description: "AiRun issue index",

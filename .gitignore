@@ -31,7 +31,8 @@ next-env.d.ts
 .prettier-cache
 .eslintcache
 
-# Generated artifacts (PDF reports, puppeteer downloads, uploads scratch)
+# Generated artifacts (PDF reports, private local object storage, uploads scratch)
+/.storage
 /.cache
 /tmp
 /uploads

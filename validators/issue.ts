@@ -98,6 +98,24 @@ export const createIssueSchema = z.object({
 
 export type CreateIssueInput = z.infer<typeof createIssueSchema>;
 
+/** Editable Problem fields only. Unknown/protected client fields are stripped. */
+const updateProjectIdSchema = z.union([
+  z.string().refine((value) => Types.ObjectId.isValid(value), "Select a valid project."),
+  z.null(),
+]);
+
+export const updateIssueSchema = z
+  .object({
+    title: issueTitleSchema.optional(),
+    description: issueDescriptionSchema.optional(),
+    category: issueCategorySchema.optional(),
+    priority: issuePrioritySchema.optional(),
+    projectId: updateProjectIdSchema.optional(),
+  })
+  .refine((value) => Object.keys(value).length > 0, "Provide at least one field to update.");
+
+export type UpdateIssueInput = z.infer<typeof updateIssueSchema>;
+
 /**
  * Fields only the server may set.
  *
@@ -135,6 +153,12 @@ function blank(value: unknown): unknown {
 export const issueStatusSchema = z.enum(ISSUE_STATUSES, {
   message: "Choose a valid status.",
 });
+
+export const changeIssueStatusSchema = z.object({
+  status: issueStatusSchema,
+});
+
+export type ChangeIssueStatusInput = z.infer<typeof changeIssueStatusSchema>;
 
 export const issueSortSchema = z.enum(ISSUE_SORTS, {
   message: "Choose a valid sort order.",

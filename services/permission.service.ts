@@ -190,3 +190,15 @@ export function canCreateIssue(target: RoleOrMembership): boolean {
 export const canAddMember = canAddWorkspaceMember;
 export const canRemoveMember = canRemoveWorkspaceMember;
 export const canChangeMemberRole = canChangeWorkspaceMemberRole;
+
+/** Owners and admins can edit any Problem; members can edit only their own. */
+export function canEditIssue(
+  target: RoleOrMembership,
+  issueCreatorId: string,
+  userId: string,
+): boolean {
+  return (
+    isWorkspaceAdmin(target) ||
+    (extractWorkspaceRole(target) === "member" && issueCreatorId === userId)
+  );
+}

@@ -57,6 +57,33 @@ export type IssuePriority = (typeof ISSUE_PRIORITIES)[number];
 export const ISSUE_SOURCES = ["text", "image", "pdf", "voice", "mixed"] as const;
 export type IssueSource = (typeof ISSUE_SOURCES)[number];
 
+export const ATTACHMENT_CATEGORIES = ["image", "document", "spreadsheet", "text", "other"] as const;
+export type AttachmentCategory = (typeof ATTACHMENT_CATEGORIES)[number];
+
+export const ATTACHMENT_PROCESSING_STATUS = [
+  "uploaded",
+  "queued",
+  "processing",
+  "processed",
+  "failed",
+] as const;
+export type AttachmentProcessingStatus = (typeof ATTACHMENT_PROCESSING_STATUS)[number];
+
+export type AttachmentProcessingResult = {
+  success: boolean;
+  status: AttachmentProcessingStatus;
+  error?: string;
+};
+
+export const EXTRACTION_STATUS = [
+  "not_started",
+  "processing",
+  "completed",
+  "failed",
+  "unsupported",
+] as const;
+export type ExtractionStatus = (typeof EXTRACTION_STATUS)[number];
+
 /* -------------------------------------------------------------------------- */
 /* Inputs, evidence, reports                                                   */
 /* -------------------------------------------------------------------------- */
@@ -167,6 +194,8 @@ export const ACTIVITY_ACTIONS = [
   "issue.created",
   "issue.updated",
   "issue.status_changed",
+  "issue.attachment_added",
+  "issue.attachment_deleted",
   "issue.analyzed",
   "issue.assigned",
   "issue.resolved",
@@ -199,6 +228,9 @@ export const ACTIVITY_ACTION_TYPES = {
   PROJECT_ARCHIVED: "project.archived",
   PROJECT_DELETED: "project.deleted",
   ISSUE_CREATED: "issue.created",
+  ISSUE_STATUS_CHANGED: "issue.status_changed",
+  ISSUE_ATTACHMENT_ADDED: "issue.attachment_added",
+  ISSUE_ATTACHMENT_DELETED: "issue.attachment_deleted",
 } as const;
 
 export const NOTIFICATION_TYPES = [
